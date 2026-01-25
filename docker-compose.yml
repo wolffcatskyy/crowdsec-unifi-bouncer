@@ -29,3 +29,6 @@ services:
       - ENABLE_IPV6=false
       - LOG_LEVEL=INFO
       - TZ=America/New_York
+
+      # Optional: anonymous telemetry (helps us know if anyone uses this)
+      # - TELEMETRY_ENABLED=true
