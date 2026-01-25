@@ -71,6 +71,77 @@
 
 ---
 
+---
+
+## Performance Benchmarks (To Document)
+
+| IP Count | Expected Sync Time | Memory |
+|----------|-------------------|--------|
+| 1,000 | ~2s | ~50MB |
+| 5,000 | ~5s | ~60MB |
+| 10,000 | ~10s | ~80MB |
+| 60,000 | ~60s | ~150MB |
+
+**UniFi API Limits:**
+- Max 10,000 IPs per firewall group
+- Rate limit: ~60 requests/minute (estimated)
+- Group update: ~1-2s per group
+
+---
+
+## Failure Modes & Recovery
+
+| Scenario | Current Behavior | Target Behavior |
+|----------|-----------------|-----------------|
+| UniFi unreachable | Loop continues, logs error | Backoff + retry, alert after N failures |
+| CrowdSec LAPI unreachable | Loop continues, logs error | Backoff + retry, keep last known state |
+| Group creation fails | Logs error, skips group | Retry with backoff, create on next cycle |
+| Partial update | Inconsistent state possible | Atomic updates or full reconciliation |
+| Auth expired | Re-login automatically ✅ | Already implemented |
+
+---
+
+## Testing Strategy
+
+### Unit Tests
+- [ ] CrowdSecClient API wrapper
+- [ ] UniFiClient API wrapper
+- [ ] IP chunking algorithm
+- [ ] IPv6 filtering
+
+### Integration Tests
+- [ ] Mock UniFi controller
+- [ ] Mock CrowdSec LAPI
+- [ ] End-to-end sync flow
+
+### Load Tests
+- [ ] 10K IPs sync performance
+- [ ] 60K IPs sync performance
+- [ ] Memory profiling
+- [ ] Concurrent update handling
+
+---
+
+## Security Considerations
+
+### Authentication
+- **Current:** Cookie-based auth (user/pass)
+- **Planned:** API token support (v1.3.0)
+- **Risk:** Passwords in environment variables
+- **Mitigation:** Docker secrets support planned
+
+### TLS Verification
+- **Current:** Skip TLS option available
+- **Planned:** Loud warning when disabled (v1.1.0)
+- **Planned:** Custom CA bundle support (v1.3.0)
+
+### Logging
+- Never log API keys or passwords
+- Redact sensitive data in error messages
+- Log rotation recommended
+
+---
+
 ## Contributing
 
 PRs welcome! Pick an item from the roadmap and submit a PR.
