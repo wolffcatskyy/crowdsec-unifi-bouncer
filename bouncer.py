@@ -5,7 +5,11 @@ A simple Python bouncer that syncs CrowdSec decisions to UniFi firewall groups.
 
 Author: Claude (Anthropic) + Human collaboration
 License: MIT
+Repository: https://github.com/wolffcatskyy/crowdsec-unifi-bouncer
 """
+
+__version__ = "1.0.0"
+__author__ = "wolffcatskyy"
 
 import os
 import sys
@@ -18,6 +22,9 @@ from urllib3.exceptions import InsecureRequestWarning
 
 # Suppress SSL warnings when UNIFI_SKIP_TLS_VERIFY is enabled
 requests.packages.urllib3.disable_warnings(InsecureRequestWarning)
+
+# User-Agent for CrowdSec to identify this bouncer
+USER_AGENT = f"crowdsec-unifi-bouncer/{__version__}"
 
 # Configuration from environment
 CROWDSEC_URL = os.getenv("CROWDSEC_URL", "http://localhost:8080")
@@ -54,6 +61,7 @@ class CrowdSecClient:
         self.origins = origins or []
         self.session = requests.Session()
         self.session.headers["X-Api-Key"] = api_key
+        self.session.headers["User-Agent"] = USER_AGENT
 
     def get_decisions_stream(self, startup: bool = False) -> dict:
         """Get decisions from stream endpoint."""
@@ -337,7 +345,7 @@ class UniFiBouncer:
 
 def main():
     """Main entry point."""
-    log.info("Starting CrowdSec UniFi Bouncer")
+    log.info(f"Starting CrowdSec UniFi Bouncer v{__version__}")
     log.info(f"CrowdSec URL: {CROWDSEC_URL}")
     log.info(f"UniFi Host: {UNIFI_HOST}")
     log.info(f"Update interval: {UPDATE_INTERVAL}s")
