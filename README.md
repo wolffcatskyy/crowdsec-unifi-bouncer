@@ -1,39 +1,65 @@
 # CrowdSec UniFi Bouncer
 
-A simple, reliable Python bouncer that syncs [CrowdSec](https://crowdsec.net) ban decisions to UniFi firewall groups.
+Sync CrowdSec ban decisions to UniFi firewall groups. Block malicious IPs at your router - the first line of defense.
+
+## Why Use This?
+
+CrowdSec detects threats. This bouncer **enforces** them at your UniFi router, blocking bad actors before they even reach your services.
+
+| Protection Layer | What it Does |
+|-----------------|--------------|
+| **CrowdSec** | Detects attacks, maintains threat database |
+| **This Bouncer** | Syncs bans to UniFi firewall groups |
+| **Your Router** | Drops packets from banned IPs |
+
+**Result:** Malicious traffic is blocked at the network edge, not at your applications.
+
+> **Want more IPs blocked?** CrowdSec's free tier includes ~22k community IPs. Use our companion tool **[crowdsec-blocklist-import](https://github.com/wolffcatskyy/crowdsec-blocklist-import)** to add 60k+ IPs from 28 free threat feeds - premium protection without the subscription!
 
 ## Features
 
 - **Simple**: ~300 lines of Python, no complex dependencies
-- **Reliable**: Cookie-based auth that actually works with UniFi OS
-- **Efficient**: Uses CrowdSec streaming API for real-time updates
-- **Scalable**: Automatically splits large IP lists into multiple groups (UniFi has 10k limit per group)
-
-## Why Another Bouncer?
-
-The existing Go-based bouncer ([teifun2/cs-unifi-bouncer](https://github.com/teifun2/cs-unifi-bouncer)) has issues with UniFi OS API key authentication. This Python version uses proven cookie-based authentication that works reliably.
+- **Docker Ready**: Pre-built multi-arch images (amd64/arm64)
+- **Auto-Scaling**: Splits large IP lists across multiple firewall groups
+- **Resilient**: Auto-reconnects on session expiry
+- **Lightweight**: Polls CrowdSec stream API, minimal resource usage
 
 ## Quick Start
 
-### 1. Add bouncer to CrowdSec
+### Docker Compose (Recommended)
 
-```bash
-sudo cscli bouncers add unifi-bouncer
-# Save the API key that's displayed
+```yaml
+version: "3.8"
+
+services:
+  crowdsec-unifi-bouncer:
+    image: ghcr.io/wolffcatskyy/crowdsec-unifi-bouncer:latest
+    container_name: crowdsec-unifi-bouncer
+    restart: unless-stopped
+    environment:
+      - CROWDSEC_URL=http://crowdsec:8080
+      - CROWDSEC_BOUNCER_API_KEY=your-api-key-here
+      - UNIFI_HOST=https://192.168.1.1
+      - UNIFI_USER=admin
+      - UNIFI_PASS=your-password
+      - UNIFI_SITE=default
+      - UNIFI_SKIP_TLS_VERIFY=true
+      - UPDATE_INTERVAL=60
+      - LOG_LEVEL=INFO
 ```
 
-### 2. Create .env file
+### Get Your CrowdSec API Key
 
 ```bash
-cp .env.example .env
-# Edit .env with your credentials
+# On your CrowdSec host
+docker exec crowdsec cscli bouncers add unifi-bouncer
 ```
 
-### 3. Run with Docker Compose
+### UniFi Setup
 
-```bash
-docker compose up -d
-```
+1. Create a **local admin user** in UniFi (not SSO/Ubiquiti account)
+2. Use those credentials in `UNIFI_USER` and `UNIFI_PASS`
+3. Create a firewall rule to DROP traffic from the `crowdsec-ban-*` groups
 
 ## Configuration
 
@@ -41,75 +67,74 @@ docker compose up -d
 |----------|---------|-------------|
 | `CROWDSEC_URL` | `http://localhost:8080` | CrowdSec LAPI URL |
 | `CROWDSEC_BOUNCER_API_KEY` | (required) | Bouncer API key from cscli |
-| `CROWDSEC_ORIGINS` | (all) | Filter by origin (space-separated: `crowdsec cscli CAPI`) |
+| `CROWDSEC_ORIGINS` | (all) | Filter by origin (space-separated) |
 | `UNIFI_HOST` | `https://192.168.1.1` | UniFi controller URL |
-| `UNIFI_USER` | (required) | UniFi username |
-| `UNIFI_PASS` | (required) | UniFi password |
+| `UNIFI_USER` | (required) | UniFi admin username |
+| `UNIFI_PASS` | (required) | UniFi admin password |
 | `UNIFI_SITE` | `default` | UniFi site name |
-| `UNIFI_SKIP_TLS_VERIFY` | `false` | Skip TLS certificate verification |
+| `UNIFI_SKIP_TLS_VERIFY` | `false` | Skip SSL verification |
 | `UNIFI_MAX_GROUP_SIZE` | `10000` | Max IPs per firewall group |
-| `ENABLE_IPV6` | `false` | Include IPv6 addresses (UniFi has issues with IPv6) |
-| `UPDATE_INTERVAL` | `60` | Seconds between updates |
-| `GROUP_PREFIX` | `crowdsec-ban` | Prefix for firewall group names |
-| `LOG_LEVEL` | `INFO` | Logging level (DEBUG, INFO, WARNING, ERROR) |
+| `UPDATE_INTERVAL` | `60` | Seconds between syncs |
+| `GROUP_PREFIX` | `crowdsec-ban` | Firewall group name prefix |
+| `ENABLE_IPV6` | `false` | Include IPv6 addresses |
+| `LOG_LEVEL` | `INFO` | DEBUG, INFO, WARNING, ERROR |
 
 ## How It Works
 
-1. **Connects to CrowdSec LAPI** using the bouncer API key
-2. **Logs into UniFi** using username/password (cookie auth)
-3. **Fetches ban decisions** from CrowdSec
-4. **Creates firewall groups** named `crowdsec-ban-0`, `crowdsec-ban-1`, etc.
-5. **Polls for updates** every `UPDATE_INTERVAL` seconds
+```
+CrowdSec LAPI ──► Stream API ──► UniFi Bouncer ──► UniFi Controller
+                                      │
+                                      ▼
+                              Firewall Groups:
+                              - crowdsec-ban-0
+                              - crowdsec-ban-1
+                              - crowdsec-ban-2
+                                      │
+                                      ▼
+                              Firewall Rules:
+                              DROP from crowdsec-ban-*
+```
 
-### Firewall Rules
+1. Bouncer polls CrowdSec's stream API for new/deleted decisions
+2. Creates/updates UniFi firewall address groups with banned IPs
+3. Your firewall rules block traffic from those groups
+4. When bans expire, IPs are automatically removed
 
-After the bouncer creates the groups, you need to create firewall rules in UniFi to block traffic from these groups:
+## UniFi Firewall Rule Setup
 
-1. Go to **Settings → Firewall & Security → Firewall Rules**
-2. Create a new rule:
-   - **Type**: Internet In
+After the bouncer creates the groups, add a firewall rule:
+
+1. **Settings** → **Firewall & Security** → **Firewall Rules**
+2. Create new rule:
+   - **Type**: Internet In (or LAN In)
    - **Action**: Drop
-   - **Source**: IP Group → `crowdsec-ban-0` (and any other bouncer groups)
+   - **Source**: Address Group → `crowdsec-ban-0` (repeat for each group)
    - **Destination**: Any
 
-## Tested On
+## Related Projects
 
-- UniFi Dream Machine SE (UniFi OS 5.x)
-- UniFi Dream Machine Pro
-- Should work on any UniFi OS device
+| Project | Description |
+|---------|-------------|
+| **[crowdsec-blocklist-import](https://github.com/wolffcatskyy/crowdsec-blocklist-import)** | Import 60k+ IPs from 28 free threat feeds into CrowdSec |
 
-## Origin Filtering
+## Troubleshooting
 
-To reduce the number of IPs (useful if you have UniFi firewall rule limits), filter by origin:
+**"Invalid username or password"**
+- Use a LOCAL UniFi admin, not Ubiquiti SSO account
+- Check credentials are correct
 
-```yaml
-# Only local detections and manual bans (~100 IPs)
-CROWDSEC_ORIGINS=crowdsec cscli
+**"No decisions found"**
+- Verify CrowdSec has decisions: `docker exec crowdsec cscli decisions list`
+- Check `CROWDSEC_ORIGINS` filter isn't excluding everything
 
-# Add community threat intel (~22k IPs)
-CROWDSEC_ORIGINS=crowdsec cscli CAPI
-
-# All decisions (default - can be 100k+ IPs)
-# CROWDSEC_ORIGINS=
-```
-
-## Development
-
-Run locally without Docker:
-
-```bash
-pip install -r requirements.txt
-export CROWDSEC_BOUNCER_API_KEY=xxx
-export UNIFI_USER=admin
-export UNIFI_PASS=xxx
-python bouncer.py
-```
+**Groups not appearing in UniFi**
+- Check bouncer logs for API errors
+- Verify UniFi user has admin permissions
 
 ## License
 
-MIT
+MIT License - see [LICENSE](LICENSE)
 
-## Credits
+## Contributing
 
-- [CrowdSec](https://crowdsec.net) - The open-source security engine
-- Inspired by [teifun2/cs-unifi-bouncer](https://github.com/teifun2/cs-unifi-bouncer)
+Contributions welcome! Please read [CONTRIBUTING.md](CONTRIBUTING.md) first.
