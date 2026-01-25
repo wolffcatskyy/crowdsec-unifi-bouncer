@@ -8,7 +8,7 @@ License: MIT
 Repository: https://github.com/wolffcatskyy/crowdsec-unifi-bouncer
 """
 
-__version__ = "1.1.0"
+__version__ = "1.2.0"
 __author__ = "wolffcatskyy"
 
 import os
@@ -42,6 +42,10 @@ ENABLE_IPV6 = os.getenv("ENABLE_IPV6", "false").lower() == "true"
 
 GROUP_PREFIX = os.getenv("GROUP_PREFIX", "crowdsec-ban")
 LOG_LEVEL = os.getenv("LOG_LEVEL", "INFO")
+
+# Anonymous telemetry (opt-in)
+TELEMETRY_ENABLED = os.getenv("TELEMETRY_ENABLED", "false").lower() == "true"
+TELEMETRY_URL = "https://api.countapi.xyz/hit/crowdsec-unifi-bouncer/starts"
 
 # Setup logging
 logging.basicConfig(
@@ -343,6 +347,19 @@ class UniFiBouncer:
                 log.error(f"Stream update failed: {e}")
 
 
+def send_telemetry():
+    """Send anonymous startup ping (opt-in only)."""
+    if not TELEMETRY_ENABLED:
+        return
+    try:
+        resp = requests.get(TELEMETRY_URL, timeout=5)
+        if resp.status_code == 200:
+            data = resp.json()
+            log.debug(f"Telemetry sent (instance #{data.get('value', '?')})")
+    except Exception:
+        pass  # Silently ignore telemetry failures
+
+
 def main():
     """Main entry point."""
     log.info(f"Starting CrowdSec UniFi Bouncer v{__version__}")
@@ -373,7 +390,12 @@ def main():
     # Create bouncer and run
     bouncer = UniFiBouncer(crowdsec, unifi, UNIFI_MAX_GROUP_SIZE, GROUP_PREFIX, ENABLE_IPV6)
     log.info(f"IPv6: {'enabled' if ENABLE_IPV6 else 'disabled'}")
+    if TELEMETRY_ENABLED:
+        log.info("Telemetry: enabled (anonymous startup ping)")
     bouncer.load_existing_groups()
+
+    # Send anonymous telemetry ping (opt-in)
+    send_telemetry()
 
     try:
         bouncer.run_stream()
