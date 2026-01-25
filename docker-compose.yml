@@ -1,0 +1,31 @@
+version: "3.8"
+
+services:
+  crowdsec-unifi-bouncer:
+    build: .
+    # Or use pre-built image:
+    # image: ghcr.io/wolffcatskyy/crowdsec-unifi-bouncer:latest
+    container_name: crowdsec-unifi-bouncer
+    restart: unless-stopped
+
+    environment:
+      # CrowdSec LAPI connection
+      - CROWDSEC_URL=http://192.168.18.10:8081
+      - CROWDSEC_BOUNCER_API_KEY=${CROWDSEC_BOUNCER_API_KEY}
+      # Optional: filter by origin (space-separated)
+      # - CROWDSEC_ORIGINS=crowdsec cscli CAPI
+
+      # UniFi controller connection
+      - UNIFI_HOST=https://192.168.18.1
+      - UNIFI_USER=${UNIFI_USER}
+      - UNIFI_PASS=${UNIFI_PASS}
+      - UNIFI_SITE=default
+      - UNIFI_SKIP_TLS_VERIFY=true
+
+      # Bouncer settings
+      - UPDATE_INTERVAL=60
+      - UNIFI_MAX_GROUP_SIZE=10000
+      - GROUP_PREFIX=crowdsec-ban
+      - ENABLE_IPV6=false
+      - LOG_LEVEL=INFO
+      - TZ=America/New_York
