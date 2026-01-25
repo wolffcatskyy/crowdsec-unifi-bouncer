@@ -1,0 +1,43 @@
+[build-system]
+requires = ["setuptools>=61.0", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "crowdsec-unifi-bouncer"
+version = "1.0.0"
+description = "CrowdSec bouncer for UniFi firewalls - syncs ban decisions to firewall groups"
+readme = "README.md"
+license = {text = "MIT"}
+authors = [
+    {name = "wolffcatskyy", email = "wolffcatskyy@users.noreply.github.com"}
+]
+keywords = ["crowdsec", "unifi", "bouncer", "firewall", "security"]
+classifiers = [
+    "Development Status :: 4 - Beta",
+    "Environment :: Console",
+    "Intended Audience :: System Administrators",
+    "License :: OSI Approved :: MIT License",
+    "Operating System :: OS Independent",
+    "Programming Language :: Python :: 3",
+    "Programming Language :: Python :: 3.9",
+    "Programming Language :: Python :: 3.10",
+    "Programming Language :: Python :: 3.11",
+    "Programming Language :: Python :: 3.12",
+    "Topic :: Security",
+    "Topic :: System :: Networking :: Firewalls",
+]
+requires-python = ">=3.9"
+dependencies = [
+    "requests>=2.28.0",
+]
+
+[project.urls]
+Homepage = "https://github.com/wolffcatskyy/crowdsec-unifi-bouncer"
+Repository = "https://github.com/wolffcatskyy/crowdsec-unifi-bouncer"
+Issues = "https://github.com/wolffcatskyy/crowdsec-unifi-bouncer/issues"
+
+[project.scripts]
+crowdsec-unifi-bouncer = "crowdsec_unifi_bouncer:main"
+
+[tool.setuptools]
+packages = ["crowdsec_unifi_bouncer"]
