@@ -8,7 +8,7 @@ License: MIT
 Repository: https://github.com/wolffcatskyy/crowdsec-unifi-bouncer
 """
 
-__version__ = "1.2.0"
+__version__ = "1.2.1"
 __author__ = "wolffcatskyy"
 
 import os
@@ -43,9 +43,9 @@ ENABLE_IPV6 = os.getenv("ENABLE_IPV6", "false").lower() == "true"
 GROUP_PREFIX = os.getenv("GROUP_PREFIX", "crowdsec-ban")
 LOG_LEVEL = os.getenv("LOG_LEVEL", "INFO")
 
-# Anonymous telemetry (opt-in)
-TELEMETRY_ENABLED = os.getenv("TELEMETRY_ENABLED", "false").lower() == "true"
-TELEMETRY_URL = "https://api.countapi.xyz/hit/crowdsec-unifi-bouncer/starts"
+# Anonymous telemetry (enabled by default, set TELEMETRY_ENABLED=false to disable)
+TELEMETRY_ENABLED = os.getenv("TELEMETRY_ENABLED", "true").lower() == "true"
+TELEMETRY_URL = "https://bouncer-telemetry.ms2738.workers.dev/ping"
 
 # Setup logging
 logging.basicConfig(
@@ -313,10 +313,13 @@ class UniFiBouncer:
 
             log.info(f"Initial stream: {len(ips)} banned IPs")
             self.sync_decisions(ips)
+            # Send telemetry after initial sync
+            send_telemetry(len(self.current_ips))
         except Exception as e:
             log.error(f"Initial stream sync failed: {e}")
             # Fall back to regular query
             self.initial_sync()
+            send_telemetry(len(self.current_ips))
 
         # Continuous polling
         while True:
@@ -347,15 +350,16 @@ class UniFiBouncer:
                 log.error(f"Stream update failed: {e}")
 
 
-def send_telemetry():
-    """Send anonymous startup ping (opt-in only)."""
+def send_telemetry(ip_count: int = 0):
+    """Send anonymous startup ping with version and IP count."""
     if not TELEMETRY_ENABLED:
         return
     try:
-        resp = requests.get(TELEMETRY_URL, timeout=5)
+        payload = {"version": __version__, "ip_count": ip_count}
+        resp = requests.post(TELEMETRY_URL, json=payload, timeout=5)
         if resp.status_code == 200:
             data = resp.json()
-            log.debug(f"Telemetry sent (instance #{data.get('value', '?')})")
+            log.debug(f"Telemetry: startup #{data.get('instance', '?')}")
     except Exception:
         pass  # Silently ignore telemetry failures
 
@@ -393,9 +397,6 @@ def main():
     if TELEMETRY_ENABLED:
         log.info("Telemetry: enabled (anonymous startup ping)")
     bouncer.load_existing_groups()
-
-    # Send anonymous telemetry ping (opt-in)
-    send_telemetry()
 
     try:
         bouncer.run_stream()
