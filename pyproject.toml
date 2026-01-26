@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "crowdsec-unifi-bouncer"
-version = "1.2.1"
+version = "1.2.2"
 description = "CrowdSec bouncer for UniFi firewalls - syncs ban decisions to firewall groups"
 readme = "README.md"
 license = {text = "MIT"}
