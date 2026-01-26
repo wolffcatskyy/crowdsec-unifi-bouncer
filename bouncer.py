@@ -8,7 +8,7 @@ License: MIT
 Repository: https://github.com/wolffcatskyy/crowdsec-unifi-bouncer
 """
 
-__version__ = "1.2.1"
+__version__ = "1.2.2"
 __author__ = "wolffcatskyy"
 
 import os
@@ -355,7 +355,7 @@ def send_telemetry(ip_count: int = 0):
     if not TELEMETRY_ENABLED:
         return
     try:
-        payload = {"version": __version__, "ip_count": ip_count}
+        payload = {"tool": "bouncer", "version": __version__, "ip_count": ip_count}
         resp = requests.post(TELEMETRY_URL, json=payload, timeout=5)
         if resp.status_code == 200:
             data = resp.json()
