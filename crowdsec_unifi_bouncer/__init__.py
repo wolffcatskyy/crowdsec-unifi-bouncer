@@ -8,7 +8,7 @@ License: MIT
 Repository: https://github.com/wolffcatskyy/crowdsec-unifi-bouncer
 """
 
-__version__ = "1.2.1"
+__version__ = "1.2.2"
 __author__ = "wolffcatskyy"
 
 import os
