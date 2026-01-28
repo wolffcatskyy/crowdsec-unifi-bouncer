@@ -8,7 +8,7 @@ License: MIT
 Repository: https://github.com/wolffcatskyy/crowdsec-unifi-bouncer
 """
 
-__version__ = "1.1.0"
+__version__ = "1.3.0"
 __author__ = "wolffcatskyy"
 
 import os
@@ -16,9 +16,13 @@ import sys
 import time
 import json
 import logging
-import requests
-from typing import Optional
+import threading
+import gc
+from http.server import HTTPServer, BaseHTTPRequestHandler
+from typing import Optional, Dict, Any
 from urllib3.exceptions import InsecureRequestWarning
+
+import requests
 
 # Suppress SSL warnings when UNIFI_SKIP_TLS_VERIFY is enabled
 requests.packages.urllib3.disable_warnings(InsecureRequestWarning)
@@ -43,6 +47,22 @@ ENABLE_IPV6 = os.getenv("ENABLE_IPV6", "false").lower() == "true"
 GROUP_PREFIX = os.getenv("GROUP_PREFIX", "crowdsec-ban")
 LOG_LEVEL = os.getenv("LOG_LEVEL", "INFO")
 
+# Health check configuration
+HEALTH_PORT = int(os.getenv("HEALTH_PORT", "8080"))
+HEALTH_ENABLED = os.getenv("HEALTH_ENABLED", "true").lower() == "true"
+
+# Batch processing configuration (for memory management)
+SYNC_BATCH_SIZE = int(os.getenv("SYNC_BATCH_SIZE", "1000"))  # IPs per batch during sync
+
+# Retry configuration for UniFi API
+UNIFI_MAX_RETRIES = int(os.getenv("UNIFI_MAX_RETRIES", "5"))
+UNIFI_INITIAL_BACKOFF = float(os.getenv("UNIFI_INITIAL_BACKOFF", "1.0"))  # seconds
+UNIFI_MAX_BACKOFF = float(os.getenv("UNIFI_MAX_BACKOFF", "60.0"))  # seconds
+
+# Anonymous telemetry (enabled by default, set TELEMETRY_ENABLED=false to disable)
+TELEMETRY_ENABLED = os.getenv("TELEMETRY_ENABLED", "true").lower() == "true"
+TELEMETRY_URL = "https://bouncer-telemetry.ms2738.workers.dev/ping"
+
 # Setup logging
 logging.basicConfig(
     level=getattr(logging, LOG_LEVEL.upper(), logging.INFO),
@@ -50,6 +70,137 @@ logging.basicConfig(
     datefmt="%Y-%m-%d %H:%M:%S"
 )
 log = logging.getLogger(__name__)
+
+
+def get_memory_usage_mb() -> float:
+    """Get current process memory usage in MB."""
+    try:
+        import resource
+        # Returns memory in KB on Linux
+        usage_kb = resource.getrusage(resource.RUSAGE_SELF).ru_maxrss
+        # On macOS it's in bytes, on Linux it's in KB
+        if sys.platform == "darwin":
+            return usage_kb / (1024 * 1024)
+        return usage_kb / 1024
+    except Exception:
+        return 0.0
+
+
+def log_memory_usage(context: str = ""):
+    """Log current memory usage with optional context."""
+    mem_mb = get_memory_usage_mb()
+    if mem_mb > 0:
+        prefix = f"[{context}] " if context else ""
+        log.debug(f"{prefix}Memory usage: {mem_mb:.1f} MB")
+
+
+# Global health status for the health check endpoint
+class HealthStatus:
+    """Thread-safe health status tracker."""
+
+    def __init__(self):
+        self._lock = threading.Lock()
+        self._crowdsec_connected = False
+        self._unifi_connected = False
+        self._last_sync_time: Optional[float] = None
+        self._last_sync_ips: int = 0
+        self._last_error: Optional[str] = None
+        self._startup_time = time.time()
+
+    def set_crowdsec_connected(self, connected: bool):
+        with self._lock:
+            self._crowdsec_connected = connected
+
+    def set_unifi_connected(self, connected: bool):
+        with self._lock:
+            self._unifi_connected = connected
+
+    def set_last_sync(self, ip_count: int):
+        with self._lock:
+            self._last_sync_time = time.time()
+            self._last_sync_ips = ip_count
+            self._last_error = None
+
+    def set_error(self, error: str):
+        with self._lock:
+            self._last_error = error
+
+    def is_healthy(self) -> bool:
+        with self._lock:
+            return self._crowdsec_connected and self._unifi_connected
+
+    def get_status(self) -> Dict[str, Any]:
+        with self._lock:
+            uptime = time.time() - self._startup_time
+            return {
+                "status": "healthy" if self._crowdsec_connected and self._unifi_connected else "unhealthy",
+                "version": __version__,
+                "uptime_seconds": int(uptime),
+                "crowdsec_connected": self._crowdsec_connected,
+                "unifi_connected": self._unifi_connected,
+                "last_sync_time": self._last_sync_time,
+                "last_sync_ips": self._last_sync_ips,
+                "last_error": self._last_error,
+                "memory_mb": round(get_memory_usage_mb(), 1)
+            }
+
+
+# Global health status instance
+health_status = HealthStatus()
+
+
+class HealthCheckHandler(BaseHTTPRequestHandler):
+    """Simple HTTP handler for health checks."""
+
+    def log_message(self, format, *args):
+        # Suppress default logging to avoid spam
+        pass
+
+    def do_GET(self):
+        if self.path == "/health" or self.path == "/":
+            status = health_status.get_status()
+            is_healthy = status["status"] == "healthy"
+
+            self.send_response(200 if is_healthy else 503)
+            self.send_header("Content-Type", "application/json")
+            self.end_headers()
+            self.wfile.write(json.dumps(status, indent=2).encode())
+        elif self.path == "/ready":
+            # Readiness probe - are we ready to serve?
+            is_ready = health_status.is_healthy()
+            self.send_response(200 if is_ready else 503)
+            self.send_header("Content-Type", "text/plain")
+            self.end_headers()
+            self.wfile.write(b"ready" if is_ready else b"not ready")
+        elif self.path == "/live":
+            # Liveness probe - is the process alive?
+            self.send_response(200)
+            self.send_header("Content-Type", "text/plain")
+            self.end_headers()
+            self.wfile.write(b"alive")
+        else:
+            self.send_response(404)
+            self.end_headers()
+
+
+def start_health_server():
+    """Start the health check HTTP server in a background thread."""
+    if not HEALTH_ENABLED:
+        log.info("Health check endpoint disabled")
+        return None
+
+    try:
+        server = HTTPServer(("0.0.0.0", HEALTH_PORT), HealthCheckHandler)
+        thread = threading.Thread(target=server.serve_forever, daemon=True)
+        thread.start()
+        log.info(f"Health check endpoint started on port {HEALTH_PORT}")
+        log.info(f"  GET /health - Full status JSON")
+        log.info(f"  GET /ready  - Readiness probe")
+        log.info(f"  GET /live   - Liveness probe")
+        return server
+    except Exception as e:
+        log.warning(f"Failed to start health check server: {e}")
+        return None
 
 
 class CrowdSecClient:
@@ -74,6 +225,7 @@ class CrowdSecClient:
 
         resp = self.session.get(url, params=params, timeout=120)
         resp.raise_for_status()
+        health_status.set_crowdsec_connected(True)
         return resp.json()
 
     def get_all_decisions(self) -> list:
@@ -87,14 +239,20 @@ class CrowdSecClient:
 
         resp = self.session.get(url, params=params, timeout=120)
         resp.raise_for_status()
+        health_status.set_crowdsec_connected(True)
         return resp.json() or []
 
 
 class UniFiClient:
-    """Simple UniFi controller client using cookie auth."""
+    """Simple UniFi controller client using cookie auth with exponential backoff."""
+
+    # HTTP status codes that should trigger retry with backoff
+    RETRYABLE_STATUS_CODES = {502, 503, 504, 429}
 
     def __init__(self, host: str, username: str, password: str,
-                 site: str = "default", verify_ssl: bool = True):
+                 site: str = "default", verify_ssl: bool = True,
+                 max_retries: int = 5, initial_backoff: float = 1.0,
+                 max_backoff: float = 60.0):
         self.host = host.rstrip("/")
         self.username = username
         self.password = password
@@ -104,19 +262,28 @@ class UniFiClient:
         self.session.verify = verify_ssl
         self.csrf_token = None
 
+        # Retry configuration
+        self.max_retries = max_retries
+        self.initial_backoff = initial_backoff
+        self.max_backoff = max_backoff
+
     def login(self) -> bool:
         """Authenticate and get session cookie."""
         url = f"{self.host}/api/auth/login"
         payload = {"username": self.username, "password": self.password}
 
         log.debug(f"Logging in to UniFi at {url}")
-        resp = self.session.post(url, json=payload, timeout=120)
+
+        try:
+            resp = self.session.post(url, json=payload, timeout=120)
+        except requests.exceptions.RequestException as e:
+            log.error(f"UniFi login connection error: {e}")
+            health_status.set_unifi_connected(False)
+            return False
 
         if resp.status_code == 200:
             # Extract CSRF token from response if present
             try:
-                data = resp.json()
-                # CSRF token might be in cookie or response
                 for cookie in self.session.cookies:
                     if cookie.name == "TOKEN":
                         import base64
@@ -130,38 +297,112 @@ class UniFiClient:
                 log.debug(f"Could not extract CSRF token: {e}")
 
             log.info("Successfully logged in to UniFi")
+            health_status.set_unifi_connected(True)
             return True
         else:
             log.error(f"UniFi login failed: {resp.status_code} - {resp.text[:200]}")
+            health_status.set_unifi_connected(False)
             return False
 
     def _api_url(self, endpoint: str) -> str:
         """Build full API URL for endpoint."""
         return f"{self.host}/proxy/network/api/s/{self.site}/{endpoint}"
 
+    def _request_with_retry(self, method: str, url: str, headers: dict, **kwargs) -> requests.Response:
+        """Execute request with exponential backoff for retryable errors."""
+        last_error = None
+        backoff = self.initial_backoff
+
+        for attempt in range(self.max_retries + 1):
+            try:
+                resp = self.session.request(method, url, headers=headers, timeout=120, **kwargs)
+
+                # Check if we got a retryable status code
+                if resp.status_code in self.RETRYABLE_STATUS_CODES:
+                    if attempt < self.max_retries:
+                        log.warning(
+                            f"UniFi API returned {resp.status_code}, "
+                            f"retrying in {backoff:.1f}s (attempt {attempt + 1}/{self.max_retries + 1})"
+                        )
+                        time.sleep(backoff)
+                        backoff = min(backoff * 2, self.max_backoff)
+                        continue
+                    else:
+                        log.error(
+                            f"UniFi API returned {resp.status_code} after {self.max_retries + 1} attempts, giving up"
+                        )
+
+                return resp
+
+            except requests.exceptions.Timeout as e:
+                last_error = e
+                if attempt < self.max_retries:
+                    log.warning(
+                        f"UniFi API timeout, retrying in {backoff:.1f}s "
+                        f"(attempt {attempt + 1}/{self.max_retries + 1})"
+                    )
+                    time.sleep(backoff)
+                    backoff = min(backoff * 2, self.max_backoff)
+                else:
+                    log.error(f"UniFi API timeout after {self.max_retries + 1} attempts")
+                    raise
+
+            except requests.exceptions.ConnectionError as e:
+                last_error = e
+                if attempt < self.max_retries:
+                    log.warning(
+                        f"UniFi API connection error: {e}, retrying in {backoff:.1f}s "
+                        f"(attempt {attempt + 1}/{self.max_retries + 1})"
+                    )
+                    time.sleep(backoff)
+                    backoff = min(backoff * 2, self.max_backoff)
+                else:
+                    log.error(f"UniFi API connection failed after {self.max_retries + 1} attempts: {e}")
+                    raise
+
+        # Should not reach here, but just in case
+        if last_error:
+            raise last_error
+        raise RuntimeError("Unexpected retry loop exit")
+
     def _request(self, method: str, endpoint: str, **kwargs) -> Optional[dict]:
-        """Make API request with auto-retry on auth failure."""
+        """Make API request with auto-retry on auth failure and exponential backoff."""
         url = self._api_url(endpoint)
         headers = kwargs.pop("headers", {})
         if self.csrf_token:
             headers["X-CSRF-Token"] = self.csrf_token
 
-        resp = self.session.request(method, url, headers=headers, timeout=120, **kwargs)
+        try:
+            resp = self._request_with_retry(method, url, headers, **kwargs)
+        except requests.exceptions.RequestException as e:
+            log.error(f"API request failed: {method} {endpoint} -> {e}")
+            health_status.set_unifi_connected(False)
+            health_status.set_error(f"UniFi API error: {e}")
+            return None
 
         if resp.status_code == 401:
             log.warning("Session expired, re-authenticating...")
             if self.login():
                 if self.csrf_token:
                     headers["X-CSRF-Token"] = self.csrf_token
-                resp = self.session.request(method, url, headers=headers, timeout=120, **kwargs)
+                try:
+                    resp = self._request_with_retry(method, url, headers, **kwargs)
+                except requests.exceptions.RequestException as e:
+                    log.error(f"API request failed after re-auth: {method} {endpoint} -> {e}")
+                    health_status.set_error(f"UniFi API error after re-auth: {e}")
+                    return None
 
         if resp.status_code >= 400:
-            log.error(f"API error: {method} {endpoint} -> {resp.status_code}: {resp.text[:200]}")
+            error_msg = f"API error: {method} {endpoint} -> {resp.status_code}: {resp.text[:200]}"
+            log.error(error_msg)
+            health_status.set_error(error_msg)
             return None
+
+        health_status.set_unifi_connected(True)
 
         try:
             return resp.json()
-        except:
+        except Exception:
             return {"meta": {"rc": "ok"}}
 
     def get_firewall_groups(self) -> list:
@@ -208,16 +449,17 @@ def is_ipv6(ip: str) -> bool:
 
 
 class UniFiBouncer:
-    """Main bouncer logic."""
+    """Main bouncer logic with memory-conscious batch processing."""
 
     def __init__(self, crowdsec: CrowdSecClient, unifi: UniFiClient,
                  max_group_size: int = 10000, group_prefix: str = "crowdsec-ban",
-                 enable_ipv6: bool = False):
+                 enable_ipv6: bool = False, sync_batch_size: int = 1000):
         self.crowdsec = crowdsec
         self.unifi = unifi
         self.max_group_size = max_group_size
         self.group_prefix = group_prefix
         self.enable_ipv6 = enable_ipv6
+        self.sync_batch_size = sync_batch_size
         self.current_ips = set()
         self.groups = {}  # name -> id mapping
 
@@ -239,82 +481,186 @@ class UniFiBouncer:
 
     def load_existing_groups(self):
         """Load existing bouncer-managed groups from UniFi."""
+        log.info("Loading existing firewall groups from UniFi...")
         groups = self.unifi.get_firewall_groups()
+
+        if groups is None:
+            log.error("Failed to fetch firewall groups from UniFi")
+            return
+
         for g in groups:
             name = g.get("name", "")
             if name.startswith(self.group_prefix):
                 self.groups[name] = g["_id"]
-                log.debug(f"Found existing group: {name} ({g['_id']})")
+                member_count = len(g.get("group_members", []))
+                log.debug(f"Found existing group: {name} ({g['_id']}) with {member_count} IPs")
+
         log.info(f"Loaded {len(self.groups)} existing bouncer groups")
 
     def sync_decisions(self, ips: set):
-        """Sync IP set to UniFi firewall groups."""
+        """Sync IP set to UniFi firewall groups with memory-conscious processing."""
+        sync_start = time.time()
+        log_memory_usage("sync_start")
+
         # Filter IPv6 if disabled
+        original_count = len(ips)
         ips = self._filter_ips(ips)
+        filtered_count = original_count - len(ips)
+
+        if filtered_count > 0:
+            log.debug(f"Filtered out {filtered_count} IPv6 addresses")
 
         if ips == self.current_ips:
-            log.debug("No changes in IP set")
+            log.debug(f"No changes in IP set (currently {len(ips)} IPs)")
             return
 
-        log.info(f"Syncing {len(ips)} IPs to UniFi")
-        chunks = self._chunk_ips(ips)
+        added = ips - self.current_ips
+        removed = self.current_ips - ips
+        log.info(f"Syncing {len(ips)} total IPs to UniFi (+{len(added)} added, -{len(removed)} removed)")
+
+        # Convert to sorted list for consistent chunking
+        ip_list = sorted(ips)
+        log_memory_usage("after_sort")
+
+        chunks = self._chunk_ips(ip_list)
+        log.info(f"Split into {len(chunks)} groups (max {self.max_group_size} IPs per group)")
+
+        # Clear the list to free memory
+        del ip_list
+        gc.collect()
+        log_memory_usage("after_gc")
 
         # Update or create groups for each chunk
+        success_count = 0
+        error_count = 0
+
         for i, chunk in enumerate(chunks):
             name = self._group_name(i)
+            log.debug(f"Processing group {name} with {len(chunk)} IPs...")
+
             if name in self.groups:
-                self.unifi.update_firewall_group(self.groups[name], name, chunk)
+                if self.unifi.update_firewall_group(self.groups[name], name, chunk):
+                    success_count += 1
+                else:
+                    error_count += 1
+                    log.error(f"Failed to update group {name}")
             else:
                 result = self.unifi.create_firewall_group(name, chunk)
                 if result:
                     self.groups[name] = result["_id"]
+                    success_count += 1
+                else:
+                    error_count += 1
+                    log.error(f"Failed to create group {name}")
+
+            # Small delay between group updates to reduce API pressure
+            if i < len(chunks) - 1:
+                time.sleep(0.5)
 
         # Delete any extra groups that are no longer needed
         needed_groups = {self._group_name(i) for i in range(len(chunks))}
-        for name, group_id in list(self.groups.items()):
-            if name not in needed_groups:
-                log.info(f"Deleting unused group: {name}")
-                if self.unifi.delete_firewall_group(group_id):
-                    del self.groups[name]
+        groups_to_delete = [name for name in self.groups.keys() if name not in needed_groups]
+
+        for name in groups_to_delete:
+            group_id = self.groups[name]
+            log.info(f"Deleting unused group: {name}")
+            if self.unifi.delete_firewall_group(group_id):
+                del self.groups[name]
+            else:
+                log.error(f"Failed to delete group {name}")
 
         self.current_ips = ips
-        log.info(f"Sync complete: {len(ips)} IPs in {len(chunks)} groups")
+        sync_duration = time.time() - sync_start
+
+        log.info(
+            f"Sync complete: {len(ips)} IPs in {len(chunks)} groups "
+            f"({success_count} succeeded, {error_count} failed) in {sync_duration:.1f}s"
+        )
+        log_memory_usage("sync_complete")
+
+        # Update health status
+        health_status.set_last_sync(len(ips))
 
     def initial_sync(self):
         """Do initial full sync from CrowdSec."""
-        log.info("Performing initial sync...")
+        log.info("Performing initial sync from CrowdSec...")
+        log_memory_usage("initial_sync_start")
 
-        # Get all current decisions
-        decisions = self.crowdsec.get_all_decisions()
-        ips = set()
+        try:
+            # Get all current decisions
+            decisions = self.crowdsec.get_all_decisions()
+            log.info(f"Received {len(decisions)} decisions from CrowdSec")
 
-        for d in decisions:
-            if d.get("type") == "ban" and d.get("scope") == "Ip":
-                ips.add(d.get("value"))
+            # Process decisions in batches to reduce memory pressure
+            ips = set()
+            ban_count = 0
+            other_count = 0
 
-        log.info(f"Got {len(ips)} banned IPs from CrowdSec")
-        self.sync_decisions(ips)
+            for d in decisions:
+                if d.get("type") == "ban" and d.get("scope") == "Ip":
+                    ips.add(d.get("value"))
+                    ban_count += 1
+                else:
+                    other_count += 1
+
+            log.info(f"Extracted {ban_count} ban decisions ({other_count} other types skipped)")
+            log_memory_usage("after_extraction")
+
+            # Clear decisions list to free memory before sync
+            del decisions
+            gc.collect()
+            log_memory_usage("after_gc")
+
+            self.sync_decisions(ips)
+
+        except requests.exceptions.RequestException as e:
+            log.error(f"Failed to fetch decisions from CrowdSec: {e}")
+            health_status.set_crowdsec_connected(False)
+            health_status.set_error(f"CrowdSec API error: {e}")
+            raise
 
     def run_stream(self):
         """Run continuous sync using stream API."""
         # Initial full sync
+        log.info("Starting stream-based synchronization...")
+
         try:
+            log.info("Fetching initial decision stream (startup=true)...")
             stream = self.crowdsec.get_decisions_stream(startup=True)
             new_decisions = stream.get("new") or []
+
+            log.info(f"Received {len(new_decisions)} decisions in initial stream")
+            log_memory_usage("after_initial_stream")
 
             ips = set()
             for d in new_decisions:
                 if d.get("type") == "ban" and d.get("scope") == "Ip":
                     ips.add(d.get("value"))
 
-            log.info(f"Initial stream: {len(ips)} banned IPs")
+            log.info(f"Extracted {len(ips)} banned IPs from initial stream")
+
+            # Clear to free memory
+            del new_decisions
+            gc.collect()
+
             self.sync_decisions(ips)
-        except Exception as e:
+            # Send telemetry after initial sync
+            send_telemetry(len(self.current_ips))
+
+        except requests.exceptions.RequestException as e:
             log.error(f"Initial stream sync failed: {e}")
+            health_status.set_crowdsec_connected(False)
+            health_status.set_error(f"CrowdSec stream error: {e}")
             # Fall back to regular query
+            log.info("Falling back to regular decision query...")
             self.initial_sync()
+            send_telemetry(len(self.current_ips))
 
         # Continuous polling
+        log.info(f"Starting continuous polling (interval: {UPDATE_INTERVAL}s)...")
+        consecutive_errors = 0
+        max_consecutive_errors = 10
+
         while True:
             time.sleep(UPDATE_INTERVAL)
 
@@ -323,24 +669,58 @@ class UniFiBouncer:
                 new_decisions = stream.get("new") or []
                 deleted_decisions = stream.get("deleted") or []
 
+                consecutive_errors = 0  # Reset on success
+
                 # Add new bans
+                added = 0
                 for d in new_decisions:
                     if d.get("type") == "ban" and d.get("scope") == "Ip":
                         self.current_ips.add(d.get("value"))
+                        added += 1
 
                 # Remove expired/deleted
+                removed = 0
                 for d in deleted_decisions:
                     if d.get("scope") == "Ip":
                         self.current_ips.discard(d.get("value"))
+                        removed += 1
 
                 if new_decisions or deleted_decisions:
-                    log.info(f"Stream update: +{len(new_decisions)} -{len(deleted_decisions)}")
+                    log.info(
+                        f"Stream update: +{len(new_decisions)} decisions (+{added} bans), "
+                        f"-{len(deleted_decisions)} decisions (-{removed} removed)"
+                    )
                     self.sync_decisions(self.current_ips)
                 else:
-                    log.debug("No changes in stream")
+                    log.debug(f"No changes in stream (maintaining {len(self.current_ips)} IPs)")
 
-            except Exception as e:
-                log.error(f"Stream update failed: {e}")
+            except requests.exceptions.RequestException as e:
+                consecutive_errors += 1
+                log.error(
+                    f"Stream update failed ({consecutive_errors}/{max_consecutive_errors}): {e}"
+                )
+                health_status.set_crowdsec_connected(False)
+                health_status.set_error(f"CrowdSec stream error: {e}")
+
+                if consecutive_errors >= max_consecutive_errors:
+                    log.critical(
+                        f"Too many consecutive errors ({consecutive_errors}), "
+                        "consider checking CrowdSec connectivity"
+                    )
+
+
+def send_telemetry(ip_count: int = 0):
+    """Send anonymous startup ping with version and IP count."""
+    if not TELEMETRY_ENABLED:
+        return
+    try:
+        payload = {"tool": "bouncer", "version": __version__, "ip_count": ip_count}
+        resp = requests.post(TELEMETRY_URL, json=payload, timeout=5)
+        if resp.status_code == 200:
+            data = resp.json()
+            log.debug(f"Telemetry: startup #{data.get('instance', '?')}")
+    except Exception:
+        pass  # Silently ignore telemetry failures
 
 
 def main():
@@ -349,8 +729,13 @@ def main():
     log.info(f"CrowdSec URL: {CROWDSEC_URL}")
     log.info(f"UniFi Host: {UNIFI_HOST}")
     log.info(f"Update interval: {UPDATE_INTERVAL}s")
+    log.info(f"Max group size: {UNIFI_MAX_GROUP_SIZE}")
+    log.info(f"Sync batch size: {SYNC_BATCH_SIZE}")
+
     if CROWDSEC_ORIGINS:
         log.info(f"Filtering origins: {CROWDSEC_ORIGINS}")
+
+    log_memory_usage("startup")
 
     # Validate config
     if not CROWDSEC_API_KEY:
@@ -360,25 +745,48 @@ def main():
         log.error("UNIFI_USER and UNIFI_PASS are required")
         sys.exit(1)
 
+    # Start health check server
+    health_server = start_health_server()
+
     # Initialize clients
     crowdsec = CrowdSecClient(CROWDSEC_URL, CROWDSEC_API_KEY, CROWDSEC_ORIGINS)
-    unifi = UniFiClient(UNIFI_HOST, UNIFI_USER, UNIFI_PASS,
-                        UNIFI_SITE, verify_ssl=not UNIFI_SKIP_TLS)
+    unifi = UniFiClient(
+        UNIFI_HOST, UNIFI_USER, UNIFI_PASS,
+        UNIFI_SITE, verify_ssl=not UNIFI_SKIP_TLS,
+        max_retries=UNIFI_MAX_RETRIES,
+        initial_backoff=UNIFI_INITIAL_BACKOFF,
+        max_backoff=UNIFI_MAX_BACKOFF
+    )
 
     # Login to UniFi
+    log.info("Connecting to UniFi controller...")
     if not unifi.login():
-        log.error("Failed to connect to UniFi")
+        log.error("Failed to connect to UniFi controller")
+        health_status.set_error("Initial UniFi login failed")
         sys.exit(1)
 
     # Create bouncer and run
-    bouncer = UniFiBouncer(crowdsec, unifi, UNIFI_MAX_GROUP_SIZE, GROUP_PREFIX, ENABLE_IPV6)
+    bouncer = UniFiBouncer(
+        crowdsec, unifi, UNIFI_MAX_GROUP_SIZE, GROUP_PREFIX,
+        ENABLE_IPV6, SYNC_BATCH_SIZE
+    )
     log.info(f"IPv6: {'enabled' if ENABLE_IPV6 else 'disabled'}")
+
+    if TELEMETRY_ENABLED:
+        log.info("Telemetry: enabled (anonymous startup ping)")
+
+    log.info(f"Retry config: max_retries={UNIFI_MAX_RETRIES}, initial_backoff={UNIFI_INITIAL_BACKOFF}s, max_backoff={UNIFI_MAX_BACKOFF}s")
+
     bouncer.load_existing_groups()
 
     try:
         bouncer.run_stream()
     except KeyboardInterrupt:
         log.info("Shutting down...")
+    except Exception as e:
+        log.critical(f"Fatal error: {e}")
+        health_status.set_error(f"Fatal: {e}")
+        raise
 
 
 if __name__ == "__main__":
