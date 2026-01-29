@@ -9,13 +9,13 @@ services:
     restart: unless-stopped
     mem_limit: 512m
     ports:
-      - "8080:8080"  # Health check endpoint
+      - "8089:8089"  # Health check endpoint
     environment:
       # CrowdSec LAPI connection
       - CROWDSEC_URL=http://192.168.18.10:8081
       - CROWDSEC_BOUNCER_API_KEY=${CROWDSEC_BOUNCER_API_KEY}
-      # Filter to local detections + manual bans only (avoid 100k+ IP timeouts)
-      - CROWDSEC_ORIGINS=crowdsec cscli
+      # Include local + community detections (capped by MAX_IPS)
+      - CROWDSEC_ORIGINS=crowdsec cscli CAPI
 
       # UniFi controller connection
       - UNIFI_HOST=https://192.168.18.1
@@ -24,9 +24,10 @@ services:
       - UNIFI_SITE=default
       - UNIFI_SKIP_TLS_VERIFY=true
 
-      # Bouncer settings
+      # Bouncer settings - "half as many, twice as often"
       - UPDATE_INTERVAL=60
-      - UNIFI_MAX_GROUP_SIZE=10000
+      - MAX_IPS=2000
+      - UNIFI_MAX_GROUP_SIZE=500
       - GROUP_PREFIX=crowdsec-ban
       - ENABLE_IPV6=false
       - LOG_LEVEL=INFO
@@ -34,17 +35,17 @@ services:
 
       # Health check settings
       - HEALTH_ENABLED=true
-      - HEALTH_PORT=8080
+      - HEALTH_PORT=8089
 
       # Retry settings for UniFi API errors (502/503/504/429)
       - UNIFI_MAX_RETRIES=5
       - UNIFI_INITIAL_BACKOFF=1.0
       - UNIFI_MAX_BACKOFF=60.0
 
-      # Anonymous telemetry (enabled by default, set to false to disable)
-      - TELEMETRY_ENABLED=${TELEMETRY_ENABLED:-true}
+      # Anonymous telemetry
+      - TELEMETRY_ENABLED=false
     healthcheck:
-      test: ["CMD", "wget", "-q", "--spider", "http://localhost:8080/health"]
+      test: ["CMD", "wget", "-q", "--spider", "http://localhost:8089/health"]
       interval: 30s
       timeout: 10s
       retries: 3

@@ -8,7 +8,7 @@ License: MIT
 Repository: https://github.com/wolffcatskyy/crowdsec-unifi-bouncer
 """
 
-__version__ = "1.3.0"
+__version__ = "1.4.0"
 __author__ = "wolffcatskyy"
 
 import os
@@ -18,6 +18,7 @@ import json
 import logging
 import threading
 import gc
+import re
 from http.server import HTTPServer, BaseHTTPRequestHandler
 from typing import Optional, Dict, Any
 from urllib3.exceptions import InsecureRequestWarning
@@ -42,6 +43,7 @@ UNIFI_PASS = os.getenv("UNIFI_PASS", "")
 UNIFI_SITE = os.getenv("UNIFI_SITE", "default")
 UNIFI_SKIP_TLS = os.getenv("UNIFI_SKIP_TLS_VERIFY", "false").lower() == "true"
 UNIFI_MAX_GROUP_SIZE = int(os.getenv("UNIFI_MAX_GROUP_SIZE", "10000"))
+MAX_IPS = int(os.getenv("MAX_IPS", "0"))  # 0 = unlimited; cap total IPs synced to UniFi
 ENABLE_IPV6 = os.getenv("ENABLE_IPV6", "false").lower() == "true"
 
 GROUP_PREFIX = os.getenv("GROUP_PREFIX", "crowdsec-ban")
@@ -448,26 +450,95 @@ def is_ipv6(ip: str) -> bool:
     return ":" in ip
 
 
+def parse_duration_seconds(duration_str: str) -> int:
+    """Parse CrowdSec duration string (e.g., '167h30m5.123s') to total seconds."""
+    total = 0
+    for value, unit in re.findall(r'([\d.]+)([hms])', str(duration_str)):
+        value = float(value)
+        if unit == 'h':
+            total += value * 3600
+        elif unit == 'm':
+            total += value * 60
+        elif unit == 's':
+            total += value
+    return int(total)
+
+
 class UniFiBouncer:
     """Main bouncer logic with memory-conscious batch processing."""
 
     def __init__(self, crowdsec: CrowdSecClient, unifi: UniFiClient,
                  max_group_size: int = 10000, group_prefix: str = "crowdsec-ban",
-                 enable_ipv6: bool = False, sync_batch_size: int = 1000):
+                 enable_ipv6: bool = False, sync_batch_size: int = 1000,
+                 max_ips: int = 0):
         self.crowdsec = crowdsec
         self.unifi = unifi
         self.max_group_size = max_group_size
         self.group_prefix = group_prefix
         self.enable_ipv6 = enable_ipv6
         self.sync_batch_size = sync_batch_size
+        self.max_ips = max_ips
         self.current_ips = set()
         self.groups = {}  # name -> id mapping
+        self._delta_count = 0
+        self._full_refresh_interval = 10  # Full refresh every N polling cycles
 
     def _filter_ips(self, ips: set) -> set:
         """Filter IPs based on IPv6 setting."""
         if self.enable_ipv6:
             return ips
         return {ip for ip in ips if not is_ipv6(ip)}
+
+    def _prioritize_and_cap(self, decisions: list) -> set:
+        """Apply MAX_IPS cap with freshness prioritization.
+
+        Priority tiers:
+        1. Local detections (crowdsec, cscli origins) - always included
+        2. Community detections (CAPI, etc.) - sorted by remaining duration, freshest first
+
+        Returns a set of IP strings, capped at self.max_ips.
+        """
+        if not decisions:
+            return set()
+
+        tier1 = []  # Local detections (always keep)
+        tier2 = []  # Community/other data (cap by freshness)
+
+        for d in decisions:
+            if d.get("type") != "ban" or d.get("scope") != "Ip":
+                continue
+            ip = d.get("value")
+            if not ip:
+                continue
+            origin = d.get("origin", "")
+
+            if origin in ("crowdsec", "cscli"):
+                tier1.append(ip)
+            else:
+                dur = parse_duration_seconds(d.get("duration", "0s"))
+                tier2.append((dur, ip))
+
+        # Build result: always include tier1
+        result = set(tier1)
+
+        if self.max_ips > 0:
+            remaining_capacity = max(0, self.max_ips - len(result))
+            # Sort tier2 by duration descending (freshest bans first)
+            tier2.sort(key=lambda x: x[0], reverse=True)
+            for dur, ip in tier2[:remaining_capacity]:
+                result.add(ip)
+
+            log.info(
+                f"IP cap: {len(tier1)} local + "
+                f"{min(len(tier2), remaining_capacity)} community "
+                f"(from {len(tier2)} available) = {len(result)} total "
+                f"(cap: {self.max_ips})"
+            )
+        else:
+            for _, ip in tier2:
+                result.add(ip)
+
+        return result
 
     def _chunk_ips(self, ips: list) -> list:
         """Split IPs into chunks of max_group_size."""
@@ -591,19 +662,9 @@ class UniFiBouncer:
             decisions = self.crowdsec.get_all_decisions()
             log.info(f"Received {len(decisions)} decisions from CrowdSec")
 
-            # Process decisions in batches to reduce memory pressure
-            ips = set()
-            ban_count = 0
-            other_count = 0
-
-            for d in decisions:
-                if d.get("type") == "ban" and d.get("scope") == "Ip":
-                    ips.add(d.get("value"))
-                    ban_count += 1
-                else:
-                    other_count += 1
-
-            log.info(f"Extracted {ban_count} ban decisions ({other_count} other types skipped)")
+            # Apply freshness-prioritized cap
+            ips = self._prioritize_and_cap(decisions)
+            log.info(f"Selected {len(ips)} IPs (cap: {self.max_ips or 'unlimited'})")
             log_memory_usage("after_extraction")
 
             # Clear decisions list to free memory before sync
@@ -632,12 +693,8 @@ class UniFiBouncer:
             log.info(f"Received {len(new_decisions)} decisions in initial stream")
             log_memory_usage("after_initial_stream")
 
-            ips = set()
-            for d in new_decisions:
-                if d.get("type") == "ban" and d.get("scope") == "Ip":
-                    ips.add(d.get("value"))
-
-            log.info(f"Extracted {len(ips)} banned IPs from initial stream")
+            ips = self._prioritize_and_cap(new_decisions)
+            log.info(f"Selected {len(ips)} IPs from initial stream (cap: {self.max_ips or 'unlimited'})")
 
             # Clear to free memory
             del new_decisions
@@ -663,8 +720,23 @@ class UniFiBouncer:
 
         while True:
             time.sleep(UPDATE_INTERVAL)
+            self._delta_count += 1
 
             try:
+                # Periodic full refresh to rotate stale IPs for fresher ones
+                if self.max_ips > 0 and self._delta_count >= self._full_refresh_interval:
+                    log.info("Performing periodic full refresh for freshness rotation...")
+                    self._delta_count = 0
+                    stream = self.crowdsec.get_decisions_stream(startup=True)
+                    new_decisions = stream.get("new") or []
+                    ips = self._prioritize_and_cap(new_decisions)
+                    del new_decisions
+                    gc.collect()
+                    self.sync_decisions(ips)
+                    consecutive_errors = 0
+                    continue
+
+                # Normal delta update
                 stream = self.crowdsec.get_decisions_stream(startup=False)
                 new_decisions = stream.get("new") or []
                 deleted_decisions = stream.get("deleted") or []
@@ -730,6 +802,7 @@ def main():
     log.info(f"UniFi Host: {UNIFI_HOST}")
     log.info(f"Update interval: {UPDATE_INTERVAL}s")
     log.info(f"Max group size: {UNIFI_MAX_GROUP_SIZE}")
+    log.info(f"Max IPs cap: {MAX_IPS if MAX_IPS > 0 else 'unlimited'}")
     log.info(f"Sync batch size: {SYNC_BATCH_SIZE}")
 
     if CROWDSEC_ORIGINS:
@@ -768,7 +841,7 @@ def main():
     # Create bouncer and run
     bouncer = UniFiBouncer(
         crowdsec, unifi, UNIFI_MAX_GROUP_SIZE, GROUP_PREFIX,
-        ENABLE_IPV6, SYNC_BATCH_SIZE
+        ENABLE_IPV6, SYNC_BATCH_SIZE, MAX_IPS
     )
     log.info(f"IPv6: {'enabled' if ENABLE_IPV6 else 'disabled'}")
 
