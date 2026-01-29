@@ -4,7 +4,7 @@ A simple, reliable Python bouncer that syncs [CrowdSec](https://crowdsec.net) ba
 
 ## Features
 
-- **Simple**: ~600 lines of Python, no complex dependencies
+- **Simple**: ~900 lines of Python, no complex dependencies
 - **Reliable**: Cookie-based auth that actually works with UniFi OS
 - **Efficient**: Uses CrowdSec streaming API for real-time updates
 - **Scalable**: Automatically splits large IP lists into multiple groups (UniFi has 10k limit per group)
@@ -53,6 +53,7 @@ docker compose up -d
 | `UNIFI_SITE` | `default` | UniFi site name |
 | `UNIFI_SKIP_TLS_VERIFY` | `false` | Skip TLS certificate verification |
 | `UNIFI_MAX_GROUP_SIZE` | `10000` | Max IPs per firewall group |
+| `MAX_IPS` | `0` | Cap total IPs synced (0=unlimited). Local detections always prioritized |
 | `ENABLE_IPV6` | `false` | Include IPv6 addresses (UniFi has issues with IPv6) |
 | `UPDATE_INTERVAL` | `60` | Seconds between updates |
 | `GROUP_PREFIX` | `crowdsec-ban` | Prefix for firewall group names |
@@ -81,7 +82,7 @@ docker compose up -d
 
 ## Health Check Endpoint
 
-The bouncer exposes an HTTP health check endpoint on port 8080 (configurable via `HEALTH_PORT`).
+The bouncer exposes an HTTP health check endpoint on port 8089 (configurable via `HEALTH_PORT`).
 
 ### Endpoints
 
@@ -96,7 +97,7 @@ The bouncer exposes an HTTP health check endpoint on port 8080 (configurable via
 ```json
 {
   "status": "healthy",
-  "version": "1.3.0",
+  "version": "1.5.0",
   "uptime_seconds": 3600,
   "crowdsec_connected": true,
   "unifi_connected": true,
@@ -114,9 +115,9 @@ services:
   crowdsec-unifi-bouncer:
     # ... other config ...
     ports:
-      - "8080:8080"  # Optional: expose for external monitoring
+      - "8089:8089"  # Optional: expose for external monitoring
     healthcheck:
-      test: ["CMD", "wget", "-q", "--spider", "http://localhost:8080/health"]
+      test: ["CMD", "wget", "-q", "--spider", "http://localhost:8089/health"]
       interval: 30s
       timeout: 10s
       retries: 3
@@ -132,9 +133,18 @@ services:
 5. **Polls for updates** every `UPDATE_INTERVAL` seconds
 6. **Retries with backoff** on UniFi 502/503/504/429 errors
 
-### Firewall Rules
+### Automatic Firewall Rules (v1.5.0+)
 
-After the bouncer creates the groups, you need to create firewall rules in UniFi to block traffic from these groups:
+Starting in v1.5.0, the bouncer **automatically creates firewall rules** on startup. For each address group (`crowdsec-ban-0`, `crowdsec-ban-1`, etc.), it creates:
+
+- **WAN_IN** drop rule: Blocks inbound traffic from banned IPs to your LAN
+- **WAN_LOCAL** drop rule: Blocks traffic from banned IPs to the router itself
+
+Rules are created via the UniFi REST API (`rest/firewallrule`) with `rule_index` starting at 20000 (WAN_IN) and 20010 (WAN_LOCAL). The bouncer checks for existing rules on each startup and only creates missing ones.
+
+#### Manual Firewall Rules (pre-v1.5.0)
+
+If using an older version, you need to manually create rules in UniFi:
 
 1. Go to **Settings -> Firewall & Security -> Firewall Rules**
 2. Create a new rule:
@@ -142,6 +152,16 @@ After the bouncer creates the groups, you need to create firewall rules in UniFi
    - **Action**: Drop
    - **Source**: IP Group -> `crowdsec-ban-0` (and any other bouncer groups)
    - **Destination**: Any
+
+### IP Cap with Freshness Prioritization (v1.4.0+)
+
+When `MAX_IPS` is set, the bouncer intelligently caps the number of IPs synced:
+
+1. **Local detections** (origin: `crowdsec`, `cscli`) are always included
+2. **Community detections** (CAPI) fill the remaining capacity, sorted by freshness (longest remaining ban first)
+3. Every 10 polling cycles, a full refresh rotates stale IPs for fresher ones
+
+This prevents router overload while keeping the most relevant threats blocked.
 
 ## Tested On
 
@@ -201,7 +221,43 @@ export UNIFI_PASS=xxx
 python bouncer.py
 ```
 
+## UniFi API Notes
+
+These quirks were discovered through trial and error on a UDM SE (UniFi OS 5.x):
+
+### Firewall Rule Creation
+
+- **Endpoint**: `POST /proxy/network/api/s/{site}/rest/firewallrule`
+- **CSRF token required**: Extract from JWT payload in the `TOKEN` cookie after login
+- **`rule_index` must be 5 digits** starting with `2` or `4` (regex: `2[0-9]{4}|4[0-9]{4}`). Values like 2000 (4 digits) are rejected with `FirewallRuleIndexOutOfRange`. Use 20000+ or 40000+.
+- **Full payload required**: Minimal payloads return `InvalidPayload`. You must include all fields: `enabled`, `name`, `action`, `protocol`, `protocol_match_excepted`, `logging`, `state_established`, `state_invalid`, `state_new`, `state_related`, `ruleset`, `rule_index`, `src_firewallgroup_ids`, `src_mac_address`, `dst_firewallgroup_ids`, `dst_address`, `src_address`, `src_networkconf_id`, `src_networkconf_type`, `dst_networkconf_id`, `dst_networkconf_type`, `ipsec`, `icmp_typename`, `setting_preference`
+- **Rulesets**: Use `WAN_IN` (external->LAN) and `WAN_LOCAL` (external->router). The UDM SE also supports zone-based firewall (GET `/proxy/network/v2/api/site/default/firewall/zone`) but legacy rulesets still work.
+
+### Authentication
+
+- Login: `POST /api/auth/login` with `{"username":"...","password":"..."}`
+- Cookie-based session (TOKEN cookie contains a JWT)
+- CSRF token is inside the JWT payload field `csrfToken`
+- Send as `X-CSRF-Token` header on all API requests
+- Python `requests.Session` handles cookies automatically; curl needs `-c`/`-b` cookie jar files
+- Session expires; re-login on 401
+
+### Zone-Based Firewall (UDM SE)
+
+The UDM SE has zones: Internal, External, Gateway, Vpn, Hotspot, Dmz. Accessible at `/proxy/network/v2/api/site/default/firewall/zone`. However, firewall rules still use the legacy `rest/firewallrule` endpoint with `WAN_IN`/`WAN_LOCAL` rulesets.
+
 ## Changelog
+
+### v1.5.0
+- **Auto-creates firewall rules** on startup (WAN_IN + WAN_LOCAL drop rules for each group)
+- No more manual rule creation needed - groups are now actually enforced automatically
+- Rules are idempotent: existing rules are detected and skipped
+
+### v1.4.0
+- Added `MAX_IPS` cap with freshness-prioritized selection
+- Local detections (crowdsec/cscli) always included; CAPI sorted by remaining duration
+- Periodic full refresh every 10 cycles for freshness rotation
+- Added `parse_duration_seconds()` for CrowdSec duration strings
 
 ### v1.3.0
 - Added health check HTTP endpoint (/health, /ready, /live)

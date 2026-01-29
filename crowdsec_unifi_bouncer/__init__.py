@@ -8,7 +8,7 @@ License: MIT
 Repository: https://github.com/wolffcatskyy/crowdsec-unifi-bouncer
 """
 
-__version__ = "1.4.0"
+__version__ = "1.5.0"
 __author__ = "wolffcatskyy"
 
 import os
@@ -444,6 +444,52 @@ class UniFiClient:
         result = self._request("DELETE", f"rest/firewallgroup/{group_id}")
         return result is not None
 
+    def get_firewall_rules(self) -> list:
+        """Get all firewall rules."""
+        result = self._request("GET", "rest/firewallrule")
+        return result.get("data", []) if result else []
+
+    def create_firewall_rule(self, name: str, ruleset: str, rule_index: int,
+                              src_group_id: str) -> Optional[dict]:
+        """Create a firewall drop rule referencing a source address group.
+
+        UDM SE API notes:
+        - rule_index must match pattern 2[0-9]{4} or 4[0-9]{4} (e.g. 20000-29999)
+        - ruleset: WAN_IN (external->LAN), WAN_LOCAL (external->router)
+        - Use requests.Session with CSRF token (extracted from JWT in TOKEN cookie)
+        """
+        payload = {
+            "enabled": True,
+            "name": name,
+            "action": "drop",
+            "protocol": "all",
+            "protocol_match_excepted": False,
+            "logging": False,
+            "state_established": False,
+            "state_invalid": False,
+            "state_new": True,
+            "state_related": False,
+            "ruleset": ruleset,
+            "rule_index": rule_index,
+            "src_firewallgroup_ids": [src_group_id],
+            "src_mac_address": "",
+            "dst_firewallgroup_ids": [],
+            "dst_address": "",
+            "src_address": "",
+            "src_networkconf_id": "",
+            "src_networkconf_type": "NETv4",
+            "dst_networkconf_id": "",
+            "dst_networkconf_type": "NETv4",
+            "ipsec": "",
+            "icmp_typename": "",
+            "setting_preference": "manual"
+        }
+        result = self._request("POST", "rest/firewallrule", json=payload)
+        if result and result.get("data"):
+            log.info(f"Created firewall rule '{name}' ({ruleset})")
+            return result["data"][0]
+        return None
+
 
 def is_ipv6(ip: str) -> bool:
     """Check if IP is IPv6."""
@@ -567,6 +613,58 @@ class UniFiBouncer:
                 log.debug(f"Found existing group: {name} ({g['_id']}) with {member_count} IPs")
 
         log.info(f"Loaded {len(self.groups)} existing bouncer groups")
+
+    def ensure_firewall_rules(self):
+        """Ensure WAN_IN and WAN_LOCAL drop rules exist for each bouncer group.
+
+        Creates firewall rules that reference the address groups so that
+        banned IPs are actually blocked. Without rules, groups do nothing.
+
+        UDM SE API notes:
+        - rule_index must be 5 digits starting with 2 or 4 (20000-29999, 40000-49999)
+        - WAN_IN blocks traffic from external to LAN
+        - WAN_LOCAL blocks traffic from external to the router itself
+        """
+        if not self.groups:
+            log.debug("No groups loaded yet, skipping rule creation")
+            return
+
+        existing_rules = self.unifi.get_firewall_rules()
+        # Map group IDs already covered by existing rules (per ruleset)
+        covered = {}  # (ruleset, group_id) -> rule_id
+        for r in existing_rules:
+            for gid in r.get("src_firewallgroup_ids", []):
+                covered[(r.get("ruleset"), gid)] = r["_id"]
+
+        created = 0
+        for name, group_id in sorted(self.groups.items()):
+            # Extract index from group name (e.g. "crowdsec-ban-0" -> 0)
+            try:
+                idx = int(name.rsplit("-", 1)[1])
+            except (ValueError, IndexError):
+                idx = list(self.groups.keys()).index(name)
+
+            for ruleset, offset in [("WAN_IN", 20000), ("WAN_LOCAL", 20010)]:
+                rule_index = offset + idx
+                key = (ruleset, group_id)
+
+                if key in covered:
+                    log.debug(f"Rule already exists: {ruleset} for {name}")
+                    continue
+
+                rule_name = f"CrowdSec Ban {idx} ({ruleset.replace('_', ' ')})"
+                result = self.unifi.create_firewall_rule(
+                    rule_name, ruleset, rule_index, group_id
+                )
+                if result:
+                    created += 1
+                else:
+                    log.warning(f"Failed to create rule: {rule_name}")
+
+        if created > 0:
+            log.info(f"Created {created} firewall rules for bouncer groups")
+        else:
+            log.info("All firewall rules already exist")
 
     def sync_decisions(self, ips: set):
         """Sync IP set to UniFi firewall groups with memory-conscious processing."""
@@ -851,6 +949,7 @@ def main():
     log.info(f"Retry config: max_retries={UNIFI_MAX_RETRIES}, initial_backoff={UNIFI_INITIAL_BACKOFF}s, max_backoff={UNIFI_MAX_BACKOFF}s")
 
     bouncer.load_existing_groups()
+    bouncer.ensure_firewall_rules()
 
     try:
         bouncer.run_stream()

@@ -2,7 +2,7 @@ FROM python:3.11-alpine
 
 LABEL maintainer="github.com/wolffcatskyy"
 LABEL description="CrowdSec bouncer for UniFi firewall"
-LABEL version="1.4.0"
+LABEL version="1.5.0"
 
 WORKDIR /app
 
