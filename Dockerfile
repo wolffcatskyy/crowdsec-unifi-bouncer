@@ -2,7 +2,7 @@ FROM python:3.11-alpine
 
 LABEL maintainer="github.com/wolffcatskyy"
 LABEL description="CrowdSec bouncer for UniFi firewall"
-LABEL version="1.3.0"
+LABEL version="1.4.0"
 
 WORKDIR /app
 
@@ -17,7 +17,7 @@ RUN pip install --no-cache-dir -r requirements.txt
 COPY bouncer.py .
 
 # Expose health check port
-EXPOSE 8080
+EXPOSE 8089
 
 # Run as non-root
 RUN adduser -D -u 1000 bouncer
