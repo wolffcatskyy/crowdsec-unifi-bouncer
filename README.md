@@ -2,6 +2,20 @@
 
 A simple, reliable Python bouncer that syncs [CrowdSec](https://crowdsec.net) ban decisions to UniFi firewall groups.
 
+---
+
+### We've Reinvented Contributing
+
+Every issue in this repo is **AI-Ready** — structured with full context, file paths, implementation guides, acceptance criteria, and a ready-to-use AI prompt at the bottom.
+
+**Pick an issue. Copy the prompt. Paste into your AI tool. Submit a PR.**
+
+No codebase knowledge required. No onboarding docs to read. Just pick an issue and go.
+
+[**Browse Issues →**](https://github.com/wolffcatskyy/crowdsec-unifi-bouncer/issues)
+
+---
+
 ## Features
 
 - **Simple**: ~900 lines of Python, no complex dependencies
