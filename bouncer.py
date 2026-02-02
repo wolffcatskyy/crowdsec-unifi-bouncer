@@ -893,6 +893,89 @@ def send_telemetry(ip_count: int = 0):
         pass  # Silently ignore telemetry failures
 
 
+def validate_config() -> list:
+    """Validate all configuration and return a list of errors.
+
+    Returns an empty list if all configuration is valid, or a list of
+    error message strings describing each problem found.
+    """
+    errors = []
+
+    if not CROWDSEC_API_KEY:
+        errors.append("CROWDSEC_BOUNCER_API_KEY is required")
+
+    if not UNIFI_USER or not UNIFI_PASS:
+        errors.append("UNIFI_USER and UNIFI_PASS are required")
+
+    if not CROWDSEC_URL:
+        errors.append("CROWDSEC_URL is required")
+
+    if not UNIFI_HOST:
+        errors.append("UNIFI_HOST is required")
+
+    if UPDATE_INTERVAL < 10:
+        errors.append(f"UPDATE_INTERVAL={UPDATE_INTERVAL} is too low (minimum 10s)")
+
+    if UNIFI_MAX_GROUP_SIZE < 1:
+        errors.append(f"UNIFI_MAX_GROUP_SIZE={UNIFI_MAX_GROUP_SIZE} must be >= 1")
+
+    if MAX_IPS < 0:
+        errors.append(f"MAX_IPS={MAX_IPS} must be >= 0 (0=unlimited)")
+
+    if HEALTH_PORT < 1 or HEALTH_PORT > 65535:
+        errors.append(f"HEALTH_PORT={HEALTH_PORT} must be between 1 and 65535")
+
+    return errors
+
+
+def validate_connectivity(crowdsec: 'CrowdSecClient', unifi: 'UniFiClient') -> list:
+    """Test connectivity to CrowdSec LAPI and UniFi controller before starting.
+
+    Returns an empty list if both services are reachable, or a list of
+    error message strings for each service that could not be reached.
+    """
+    errors = []
+
+    # Test CrowdSec LAPI
+    log.info("Testing CrowdSec LAPI connectivity...")
+    try:
+        resp = crowdsec.session.get(
+            f"{crowdsec.url}/v1/decisions",
+            params={"type": "ban", "limit": 1},
+            timeout=10
+        )
+        if resp.status_code == 200 or resp.status_code == 404:
+            # 404 = no decisions, but LAPI is reachable
+            log.info("CrowdSec LAPI: reachable")
+            health_status.set_crowdsec_connected(True)
+        elif resp.status_code == 403:
+            errors.append(
+                f"CrowdSec LAPI returned 403 Forbidden - check CROWDSEC_BOUNCER_API_KEY"
+            )
+        else:
+            errors.append(
+                f"CrowdSec LAPI returned unexpected status {resp.status_code}"
+            )
+    except requests.exceptions.ConnectionError as e:
+        errors.append(f"CrowdSec LAPI unreachable at {crowdsec.url}: {e}")
+    except requests.exceptions.Timeout:
+        errors.append(f"CrowdSec LAPI timed out at {crowdsec.url} (10s)")
+    except Exception as e:
+        errors.append(f"CrowdSec LAPI error: {e}")
+
+    # Test UniFi controller
+    log.info("Testing UniFi controller connectivity...")
+    if not unifi.login():
+        errors.append(
+            f"UniFi controller login failed at {unifi.host} - "
+            f"check UNIFI_USER/UNIFI_PASS and that the controller is reachable"
+        )
+    else:
+        log.info("UniFi controller: reachable and authenticated")
+
+    return errors
+
+
 def main():
     """Main entry point."""
     log.info(f"Starting CrowdSec UniFi Bouncer v{__version__}")
@@ -906,14 +989,25 @@ def main():
     if CROWDSEC_ORIGINS:
         log.info(f"Filtering origins: {CROWDSEC_ORIGINS}")
 
+    # TLS verification warning
+    if UNIFI_SKIP_TLS:
+        log.warning("=" * 60)
+        log.warning("WARNING: TLS certificate verification is DISABLED")
+        log.warning("  UNIFI_SKIP_TLS_VERIFY=true")
+        log.warning("  This makes the connection vulnerable to MITM attacks.")
+        log.warning("  Consider using a valid certificate or a custom CA bundle.")
+        log.warning("=" * 60)
+
     log_memory_usage("startup")
 
-    # Validate config
-    if not CROWDSEC_API_KEY:
-        log.error("CROWDSEC_BOUNCER_API_KEY is required")
-        sys.exit(1)
-    if not UNIFI_USER or not UNIFI_PASS:
-        log.error("UNIFI_USER and UNIFI_PASS are required")
+    # Validate configuration (fail fast with all errors)
+    config_errors = validate_config()
+    if config_errors:
+        log.error("=" * 60)
+        log.error("CONFIGURATION ERRORS - cannot start:")
+        for err in config_errors:
+            log.error(f"  - {err}")
+        log.error("=" * 60)
         sys.exit(1)
 
     # Start health check server
@@ -929,11 +1023,15 @@ def main():
         max_backoff=UNIFI_MAX_BACKOFF
     )
 
-    # Login to UniFi
-    log.info("Connecting to UniFi controller...")
-    if not unifi.login():
-        log.error("Failed to connect to UniFi controller")
-        health_status.set_error("Initial UniFi login failed")
+    # Test connectivity to both services before entering the main loop
+    log.info("Validating connectivity...")
+    conn_errors = validate_connectivity(crowdsec, unifi)
+    if conn_errors:
+        log.error("=" * 60)
+        log.error("CONNECTIVITY ERRORS - cannot start:")
+        for err in conn_errors:
+            log.error(f"  - {err}")
+        log.error("=" * 60)
         sys.exit(1)
 
     # Create bouncer and run
