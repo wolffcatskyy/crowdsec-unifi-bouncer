@@ -19,6 +19,7 @@ import logging
 import threading
 import gc
 import re
+import hashlib
 from http.server import HTTPServer, BaseHTTPRequestHandler
 from typing import Optional, Dict, Any
 from urllib3.exceptions import InsecureRequestWarning
@@ -526,8 +527,20 @@ class UniFiBouncer:
         self.max_ips = max_ips
         self.current_ips = set()
         self.groups = {}  # name -> id mapping
+        self.group_members = {}  # name -> set of IPs (loaded from UniFi for drift detection)
+        self._last_sync_hash = None  # Hash of last synced IP set for idempotency
         self._delta_count = 0
         self._full_refresh_interval = 10  # Full refresh every N polling cycles
+
+    @staticmethod
+    def _compute_ip_hash(ips: set) -> str:
+        """Compute a deterministic hash of an IP set for idempotency checks.
+
+        IPs are sorted to ensure the same set always produces the same hash,
+        regardless of insertion order. This allows skipping no-op updates.
+        """
+        ip_str = "\n".join(sorted(ips))
+        return hashlib.sha256(ip_str.encode()).hexdigest()[:16]
 
     def _filter_ips(self, ips: set) -> set:
         """Filter IPs based on IPv6 setting."""
@@ -597,7 +610,11 @@ class UniFiBouncer:
         return f"{self.group_prefix}-{index}"
 
     def load_existing_groups(self):
-        """Load existing bouncer-managed groups from UniFi."""
+        """Load existing bouncer-managed groups from UniFi.
+
+        Also loads actual group members for drift detection, so we can
+        detect if groups were manually edited or removed outside the bouncer.
+        """
         log.info("Loading existing firewall groups from UniFi...")
         groups = self.unifi.get_firewall_groups()
 
@@ -605,14 +622,126 @@ class UniFiBouncer:
             log.error("Failed to fetch firewall groups from UniFi")
             return
 
+        self.groups = {}
+        self.group_members = {}
+
         for g in groups:
             name = g.get("name", "")
             if name.startswith(self.group_prefix):
                 self.groups[name] = g["_id"]
-                member_count = len(g.get("group_members", []))
-                log.debug(f"Found existing group: {name} ({g['_id']}) with {member_count} IPs")
+                members = set(g.get("group_members", []))
+                self.group_members[name] = members
+                log.debug(f"Found existing group: {name} ({g['_id']}) with {len(members)} IPs")
 
-        log.info(f"Loaded {len(self.groups)} existing bouncer groups")
+        # Reconstruct current_ips from loaded groups
+        if self.groups:
+            all_loaded_ips = set()
+            for members in self.group_members.values():
+                all_loaded_ips.update(members)
+            self.current_ips = all_loaded_ips
+            self._last_sync_hash = self._compute_ip_hash(all_loaded_ips)
+            log.info(f"Loaded {len(self.groups)} existing bouncer groups "
+                     f"with {len(all_loaded_ips)} total IPs (hash: {self._last_sync_hash})")
+        else:
+            log.info("No existing bouncer groups found")
+
+    def detect_drift(self) -> dict:
+        """Detect when UniFi groups were manually edited or removed.
+
+        Compares the in-memory group state against what is actually in UniFi.
+        Returns a dict with drift details:
+          - missing_groups: groups we expect but are gone from UniFi
+          - modified_groups: groups whose members differ from expected
+          - extra_groups: groups in UniFi that we don't track (with our prefix)
+        """
+        log.debug("Checking for drift in UniFi firewall groups...")
+        actual_groups = self.unifi.get_firewall_groups()
+
+        if actual_groups is None:
+            log.warning("Could not fetch groups for drift detection")
+            return {"missing_groups": [], "modified_groups": [], "extra_groups": []}
+
+        # Build map of actual UniFi groups with our prefix
+        actual = {}
+        for g in actual_groups:
+            name = g.get("name", "")
+            if name.startswith(self.group_prefix):
+                actual[name] = {
+                    "id": g["_id"],
+                    "members": set(g.get("group_members", []))
+                }
+
+        missing_groups = []
+        modified_groups = []
+        extra_groups = []
+
+        # Check for missing or modified groups
+        for name, group_id in self.groups.items():
+            if name not in actual:
+                missing_groups.append(name)
+                log.warning(f"DRIFT: Group '{name}' was deleted from UniFi")
+            else:
+                expected_members = self.group_members.get(name, set())
+                actual_members = actual[name]["members"]
+                if expected_members != actual_members:
+                    added = actual_members - expected_members
+                    removed = expected_members - actual_members
+                    modified_groups.append(name)
+                    log.warning(
+                        f"DRIFT: Group '{name}' was manually edited "
+                        f"(+{len(added)} added, -{len(removed)} removed)"
+                    )
+
+        # Check for extra groups we don't track
+        for name in actual:
+            if name not in self.groups:
+                extra_groups.append(name)
+                log.warning(f"DRIFT: Unknown group '{name}' with our prefix found")
+
+        drift = {
+            "missing_groups": missing_groups,
+            "modified_groups": modified_groups,
+            "extra_groups": extra_groups
+        }
+
+        if missing_groups or modified_groups:
+            log.warning(
+                f"Drift detected: {len(missing_groups)} missing, "
+                f"{len(modified_groups)} modified, {len(extra_groups)} extra"
+            )
+        else:
+            log.debug("No drift detected")
+
+        return drift
+
+    def reconcile_drift(self):
+        """Reconcile drift by reloading groups from UniFi and re-syncing if needed.
+
+        If groups are missing or modified, forces a full re-sync of the
+        current IP set to restore the expected state.
+        """
+        drift = self.detect_drift()
+
+        if not drift["missing_groups"] and not drift["modified_groups"]:
+            return False  # No reconciliation needed
+
+        log.info("Reconciling drift: forcing full re-sync...")
+
+        # Remove missing groups from our tracking
+        for name in drift["missing_groups"]:
+            if name in self.groups:
+                del self.groups[name]
+            if name in self.group_members:
+                del self.group_members[name]
+
+        # Invalidate the sync hash to force re-sync
+        self._last_sync_hash = None
+
+        # Re-sync the current IP set
+        if self.current_ips:
+            self.sync_decisions(self.current_ips, force=True)
+
+        return True
 
     def ensure_firewall_rules(self):
         """Ensure WAN_IN and WAN_LOCAL drop rules exist for each bouncer group.
@@ -666,8 +795,19 @@ class UniFiBouncer:
         else:
             log.info("All firewall rules already exist")
 
-    def sync_decisions(self, ips: set):
-        """Sync IP set to UniFi firewall groups with memory-conscious processing."""
+    def sync_decisions(self, ips: set, force: bool = False):
+        """Sync IP set to UniFi firewall groups with memory-conscious processing.
+
+        Uses hash-based idempotency to skip no-op updates. The IP set is hashed
+        and compared to the last synced hash. If they match, the sync is skipped
+        unless force=True (used during drift reconciliation).
+
+        IP-to-group mapping algorithm (deterministic):
+        1. IPs are sorted lexicographically (sorted())
+        2. Sorted list is split into chunks of max_group_size
+        3. Chunk i -> group "{group_prefix}-{i}"
+        This ensures the same IP set always maps to the same groups.
+        """
         sync_start = time.time()
         log_memory_usage("sync_start")
 
@@ -679,15 +819,27 @@ class UniFiBouncer:
         if filtered_count > 0:
             log.debug(f"Filtered out {filtered_count} IPv6 addresses")
 
-        if ips == self.current_ips:
+        # Hash-based idempotency: skip if IP set hasn't changed
+        current_hash = self._compute_ip_hash(ips)
+
+        if not force and current_hash == self._last_sync_hash:
+            log.debug(f"No changes in IP set (hash: {current_hash}, {len(ips)} IPs) - skipping sync")
+            return
+
+        if not force and ips == self.current_ips:
             log.debug(f"No changes in IP set (currently {len(ips)} IPs)")
+            self._last_sync_hash = current_hash
             return
 
         added = ips - self.current_ips
         removed = self.current_ips - ips
-        log.info(f"Syncing {len(ips)} total IPs to UniFi (+{len(added)} added, -{len(removed)} removed)")
+        log.info(
+            f"Syncing {len(ips)} total IPs to UniFi "
+            f"(+{len(added)} added, -{len(removed)} removed, hash: {current_hash})"
+        )
 
-        # Convert to sorted list for consistent chunking
+        # Convert to sorted list for deterministic, stable chunking
+        # Sorting ensures the same IPs always end up in the same groups
         ip_list = sorted(ips)
         log_memory_usage("after_sort")
 
@@ -709,6 +861,7 @@ class UniFiBouncer:
 
             if name in self.groups:
                 if self.unifi.update_firewall_group(self.groups[name], name, chunk):
+                    self.group_members[name] = set(chunk)
                     success_count += 1
                 else:
                     error_count += 1
@@ -717,6 +870,7 @@ class UniFiBouncer:
                 result = self.unifi.create_firewall_group(name, chunk)
                 if result:
                     self.groups[name] = result["_id"]
+                    self.group_members[name] = set(chunk)
                     success_count += 1
                 else:
                     error_count += 1
@@ -728,17 +882,19 @@ class UniFiBouncer:
 
         # Delete any extra groups that are no longer needed
         needed_groups = {self._group_name(i) for i in range(len(chunks))}
-        groups_to_delete = [name for name in self.groups.keys() if name not in needed_groups]
+        groups_to_delete = [name for name in list(self.groups.keys()) if name not in needed_groups]
 
         for name in groups_to_delete:
             group_id = self.groups[name]
             log.info(f"Deleting unused group: {name}")
             if self.unifi.delete_firewall_group(group_id):
                 del self.groups[name]
+                self.group_members.pop(name, None)
             else:
                 log.error(f"Failed to delete group {name}")
 
         self.current_ips = ips
+        self._last_sync_hash = current_hash
         sync_duration = time.time() - sync_start
 
         log.info(
@@ -815,10 +971,21 @@ class UniFiBouncer:
         log.info(f"Starting continuous polling (interval: {UPDATE_INTERVAL}s)...")
         consecutive_errors = 0
         max_consecutive_errors = 10
+        drift_check_interval = 5  # Check for drift every N cycles
+        drift_check_counter = 0
 
         while True:
             time.sleep(UPDATE_INTERVAL)
             self._delta_count += 1
+            drift_check_counter += 1
+
+            # Periodic drift detection and reconciliation
+            if drift_check_counter >= drift_check_interval:
+                drift_check_counter = 0
+                try:
+                    self.reconcile_drift()
+                except Exception as e:
+                    log.warning(f"Drift check failed: {e}")
 
             try:
                 # Periodic full refresh to rotate stale IPs for fresher ones
