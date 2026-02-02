@@ -40,8 +40,10 @@ UPDATE_INTERVAL = int(os.getenv("UPDATE_INTERVAL", "60"))  # seconds
 UNIFI_HOST = os.getenv("UNIFI_HOST", "https://192.168.1.1")
 UNIFI_USER = os.getenv("UNIFI_USER", "")
 UNIFI_PASS = os.getenv("UNIFI_PASS", "")
+UNIFI_API_TOKEN = os.getenv("UNIFI_API_TOKEN", "")  # API token auth (alternative to user/pass)
 UNIFI_SITE = os.getenv("UNIFI_SITE", "default")
 UNIFI_SKIP_TLS = os.getenv("UNIFI_SKIP_TLS_VERIFY", "false").lower() == "true"
+UNIFI_CA_BUNDLE = os.getenv("UNIFI_CA_BUNDLE", "")  # Custom CA bundle path for TLS verification
 UNIFI_MAX_GROUP_SIZE = int(os.getenv("UNIFI_MAX_GROUP_SIZE", "10000"))
 MAX_IPS = int(os.getenv("MAX_IPS", "0"))  # 0 = unlimited; cap total IPs synced to UniFi
 ENABLE_IPV6 = os.getenv("ENABLE_IPV6", "false").lower() == "true"
@@ -246,7 +248,13 @@ class CrowdSecClient:
 
 
 class UniFiClient:
-    """Simple UniFi controller client using cookie auth with exponential backoff."""
+    """UniFi controller client supporting cookie auth and API token auth with exponential backoff.
+
+    Authentication modes:
+    1. Cookie auth (default): Uses username/password to get a session cookie + CSRF token
+    2. API token auth: Uses a static API token in the X-API-KEY header (no login needed)
+       Set UNIFI_API_TOKEN to use this mode. Username/password are ignored when token is set.
+    """
 
     # HTTP status codes that should trigger retry with backoff
     RETRYABLE_STATUS_CODES = {502, 503, 504, 429}
@@ -254,15 +262,28 @@ class UniFiClient:
     def __init__(self, host: str, username: str, password: str,
                  site: str = "default", verify_ssl: bool = True,
                  max_retries: int = 5, initial_backoff: float = 1.0,
-                 max_backoff: float = 60.0):
+                 max_backoff: float = 60.0, api_token: str = "",
+                 ca_bundle: str = ""):
         self.host = host.rstrip("/")
         self.username = username
         self.password = password
+        self.api_token = api_token
         self.site = site
         self.verify_ssl = verify_ssl
         self.session = requests.Session()
-        self.session.verify = verify_ssl
         self.csrf_token = None
+
+        # Configure TLS verification
+        if ca_bundle and os.path.exists(ca_bundle):
+            self.session.verify = ca_bundle
+            log.info(f"Using custom CA bundle: {ca_bundle}")
+        else:
+            self.session.verify = verify_ssl
+
+        # API token auth: set the header once, no login needed
+        if self.api_token:
+            self.session.headers["X-API-KEY"] = self.api_token
+            log.info("Using API token authentication")
 
         # Retry configuration
         self.max_retries = max_retries
@@ -270,7 +291,35 @@ class UniFiClient:
         self.max_backoff = max_backoff
 
     def login(self) -> bool:
-        """Authenticate and get session cookie."""
+        """Authenticate with UniFi controller.
+
+        If API token is configured, verifies connectivity by fetching firewall groups.
+        Otherwise, uses cookie-based auth with username/password.
+        """
+        if self.api_token:
+            # Token auth: verify connectivity with a lightweight API call
+            log.info("Verifying API token authentication...")
+            try:
+                url = self._api_url("rest/firewallgroup")
+                resp = self.session.get(url, timeout=30)
+                if resp.status_code == 200:
+                    log.info("Successfully authenticated with API token")
+                    health_status.set_unifi_connected(True)
+                    return True
+                elif resp.status_code == 401 or resp.status_code == 403:
+                    log.error(f"API token rejected: {resp.status_code} - check UNIFI_API_TOKEN")
+                    health_status.set_unifi_connected(False)
+                    return False
+                else:
+                    log.error(f"API token verification failed: {resp.status_code} - {resp.text[:200]}")
+                    health_status.set_unifi_connected(False)
+                    return False
+            except requests.exceptions.RequestException as e:
+                log.error(f"UniFi connection error during token verification: {e}")
+                health_status.set_unifi_connected(False)
+                return False
+
+        # Cookie-based auth
         url = f"{self.host}/api/auth/login"
         payload = {"username": self.username, "password": self.password}
 
@@ -912,9 +961,19 @@ def main():
     if not CROWDSEC_API_KEY:
         log.error("CROWDSEC_BOUNCER_API_KEY is required")
         sys.exit(1)
-    if not UNIFI_USER or not UNIFI_PASS:
-        log.error("UNIFI_USER and UNIFI_PASS are required")
+    if UNIFI_API_TOKEN:
+        log.info("Auth mode: API token")
+    elif UNIFI_USER and UNIFI_PASS:
+        log.info("Auth mode: username/password (cookie)")
+    else:
+        log.error("Either UNIFI_API_TOKEN or both UNIFI_USER and UNIFI_PASS are required")
         sys.exit(1)
+
+    if UNIFI_CA_BUNDLE:
+        if os.path.exists(UNIFI_CA_BUNDLE):
+            log.info(f"Custom CA bundle: {UNIFI_CA_BUNDLE}")
+        else:
+            log.warning(f"CA bundle path does not exist: {UNIFI_CA_BUNDLE}")
 
     # Start health check server
     health_server = start_health_server()
@@ -926,7 +985,9 @@ def main():
         UNIFI_SITE, verify_ssl=not UNIFI_SKIP_TLS,
         max_retries=UNIFI_MAX_RETRIES,
         initial_backoff=UNIFI_INITIAL_BACKOFF,
-        max_backoff=UNIFI_MAX_BACKOFF
+        max_backoff=UNIFI_MAX_BACKOFF,
+        api_token=UNIFI_API_TOKEN,
+        ca_bundle=UNIFI_CA_BUNDLE
     )
 
     # Login to UniFi
