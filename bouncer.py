@@ -47,7 +47,14 @@ MAX_IPS = int(os.getenv("MAX_IPS", "0"))  # 0 = unlimited; cap total IPs synced 
 ENABLE_IPV6 = os.getenv("ENABLE_IPV6", "false").lower() == "true"
 
 GROUP_PREFIX = os.getenv("GROUP_PREFIX", "crowdsec-ban")
+BLOCKLIST_GROUP_PREFIX = os.getenv("BLOCKLIST_GROUP_PREFIX", "blocklist-ban")
 LOG_LEVEL = os.getenv("LOG_LEVEL", "INFO")
+
+# External blocklist configuration
+# Comma-separated list of URLs to plain-text IP blocklists (one IP per line)
+BLOCKLIST_URLS = [u.strip() for u in os.getenv("BLOCKLIST_URLS", "").split(",") if u.strip()]
+BLOCKLIST_REFRESH_INTERVAL = int(os.getenv("BLOCKLIST_REFRESH_INTERVAL", "86400"))  # seconds (default: 24h)
+BLOCKLIST_MAX_IPS = int(os.getenv("BLOCKLIST_MAX_IPS", "5000"))  # Max IPs from blocklists (0=unlimited)
 
 # Health check configuration
 HEALTH_PORT = int(os.getenv("HEALTH_PORT", "8080"))
@@ -510,13 +517,111 @@ def parse_duration_seconds(duration_str: str) -> int:
     return int(total)
 
 
+class BlocklistFetcher:
+    """Fetch and parse external IP blocklists.
+
+    Supports plain-text blocklists with one IP/CIDR per line.
+    Lines starting with # or ; are treated as comments.
+    Automatically deduplicates IPs across multiple sources.
+    """
+
+    def __init__(self, urls: list, max_ips: int = 0, enable_ipv6: bool = False):
+        self.urls = urls
+        self.max_ips = max_ips
+        self.enable_ipv6 = enable_ipv6
+        self.cached_ips: set = set()
+        self.last_fetch_time: float = 0
+        self.fetch_errors: list = []
+
+    def fetch_all(self) -> set:
+        """Fetch IPs from all configured blocklist URLs.
+
+        Returns a deduplicated set of IP addresses. Skips invalid lines
+        and comments. Logs errors for individual sources but continues
+        fetching from remaining sources.
+        """
+        if not self.urls:
+            return set()
+
+        all_ips = set()
+        self.fetch_errors = []
+
+        for url in self.urls:
+            try:
+                log.info(f"Fetching blocklist: {url}")
+                resp = requests.get(url, timeout=30, headers={"User-Agent": USER_AGENT})
+                resp.raise_for_status()
+
+                count = 0
+                for line in resp.text.splitlines():
+                    line = line.strip()
+                    # Skip empty lines and comments
+                    if not line or line.startswith("#") or line.startswith(";"):
+                        continue
+                    # Handle lines with comments after IP (e.g., "1.2.3.4 # comment")
+                    ip = line.split()[0].split("#")[0].strip()
+                    if not ip:
+                        continue
+                    # Basic IP validation
+                    if not self.enable_ipv6 and is_ipv6(ip):
+                        continue
+                    all_ips.add(ip)
+                    count += 1
+
+                log.info(f"Fetched {count} IPs from {url}")
+
+            except requests.exceptions.RequestException as e:
+                error_msg = f"Failed to fetch blocklist {url}: {e}"
+                log.warning(error_msg)
+                self.fetch_errors.append(error_msg)
+            except Exception as e:
+                error_msg = f"Error parsing blocklist {url}: {e}"
+                log.warning(error_msg)
+                self.fetch_errors.append(error_msg)
+
+        # Apply cap
+        if self.max_ips > 0 and len(all_ips) > self.max_ips:
+            # Convert to sorted list for deterministic capping
+            all_ips = set(sorted(all_ips)[:self.max_ips])
+            log.info(f"Blocklist IPs capped at {self.max_ips} (from {len(all_ips)} total)")
+
+        self.cached_ips = all_ips
+        self.last_fetch_time = time.time()
+
+        log.info(f"Total blocklist IPs: {len(all_ips)} from {len(self.urls)} sources "
+                 f"({len(self.fetch_errors)} errors)")
+
+        return all_ips
+
+    def needs_refresh(self, refresh_interval: int) -> bool:
+        """Check if blocklists need to be refreshed."""
+        if not self.last_fetch_time:
+            return True
+        return (time.time() - self.last_fetch_time) >= refresh_interval
+
+    def get_unique_ips(self, crowdsec_ips: set) -> set:
+        """Return blocklist IPs that are not already in CrowdSec decisions.
+
+        This deduplicates blocklist IPs against CrowdSec decisions to avoid
+        double-counting IPs that appear in both sources.
+        """
+        unique = self.cached_ips - crowdsec_ips
+        if self.cached_ips:
+            overlap = len(self.cached_ips) - len(unique)
+            if overlap > 0:
+                log.debug(f"Blocklist dedup: {overlap} IPs already in CrowdSec, {len(unique)} unique")
+        return unique
+
+
 class UniFiBouncer:
     """Main bouncer logic with memory-conscious batch processing."""
 
     def __init__(self, crowdsec: CrowdSecClient, unifi: UniFiClient,
                  max_group_size: int = 10000, group_prefix: str = "crowdsec-ban",
                  enable_ipv6: bool = False, sync_batch_size: int = 1000,
-                 max_ips: int = 0):
+                 max_ips: int = 0, blocklist_fetcher: BlocklistFetcher = None,
+                 blocklist_group_prefix: str = "blocklist-ban",
+                 blocklist_refresh_interval: int = 86400):
         self.crowdsec = crowdsec
         self.unifi = unifi
         self.max_group_size = max_group_size
@@ -528,6 +633,13 @@ class UniFiBouncer:
         self.groups = {}  # name -> id mapping
         self._delta_count = 0
         self._full_refresh_interval = 10  # Full refresh every N polling cycles
+
+        # Blocklist support
+        self.blocklist_fetcher = blocklist_fetcher
+        self.blocklist_group_prefix = blocklist_group_prefix
+        self.blocklist_refresh_interval = blocklist_refresh_interval
+        self.blocklist_groups = {}  # name -> id mapping for blocklist groups
+        self.blocklist_ips = set()
 
     def _filter_ips(self, ips: set) -> set:
         """Filter IPs based on IPv6 setting."""
@@ -750,6 +862,59 @@ class UniFiBouncer:
         # Update health status
         health_status.set_last_sync(len(ips))
 
+    def sync_blocklists(self):
+        """Sync external blocklist IPs to separate firewall groups.
+
+        Blocklist IPs go into their own groups (blocklist-ban-0, blocklist-ban-1, etc.)
+        separate from CrowdSec groups. IPs are deduplicated against CrowdSec decisions.
+        """
+        if not self.blocklist_fetcher or not self.blocklist_fetcher.urls:
+            return
+
+        if not self.blocklist_fetcher.needs_refresh(self.blocklist_refresh_interval):
+            log.debug("Blocklists still fresh, skipping refresh")
+            return
+
+        log.info("Refreshing external blocklists...")
+        all_blocklist_ips = self.blocklist_fetcher.fetch_all()
+
+        # Deduplicate against CrowdSec decisions
+        unique_ips = self.blocklist_fetcher.get_unique_ips(self.current_ips)
+
+        if unique_ips == self.blocklist_ips:
+            log.debug(f"No changes in blocklist IPs ({len(unique_ips)} IPs)")
+            return
+
+        log.info(f"Syncing {len(unique_ips)} unique blocklist IPs to UniFi")
+
+        # Chunk and sync to separate groups
+        ip_list = sorted(unique_ips)
+        chunks = [ip_list[i:i + self.max_group_size]
+                  for i in range(0, len(ip_list), self.max_group_size)]
+
+        for i, chunk in enumerate(chunks):
+            name = f"{self.blocklist_group_prefix}-{i}"
+
+            if name in self.blocklist_groups:
+                self.unifi.update_firewall_group(self.blocklist_groups[name], name, chunk)
+            else:
+                result = self.unifi.create_firewall_group(name, chunk)
+                if result:
+                    self.blocklist_groups[name] = result["_id"]
+
+            if i < len(chunks) - 1:
+                time.sleep(0.5)
+
+        # Delete extra blocklist groups
+        needed = {f"{self.blocklist_group_prefix}-{i}" for i in range(len(chunks))}
+        for name in list(self.blocklist_groups.keys()):
+            if name not in needed:
+                if self.unifi.delete_firewall_group(self.blocklist_groups[name]):
+                    del self.blocklist_groups[name]
+
+        self.blocklist_ips = unique_ips
+        log.info(f"Blocklist sync complete: {len(unique_ips)} IPs in {len(chunks)} groups")
+
     def initial_sync(self):
         """Do initial full sync from CrowdSec."""
         log.info("Performing initial sync from CrowdSec...")
@@ -811,6 +976,12 @@ class UniFiBouncer:
             self.initial_sync()
             send_telemetry(len(self.current_ips))
 
+        # Initial blocklist sync
+        try:
+            self.sync_blocklists()
+        except Exception as e:
+            log.warning(f"Initial blocklist sync failed: {e}")
+
         # Continuous polling
         log.info(f"Starting continuous polling (interval: {UPDATE_INTERVAL}s)...")
         consecutive_errors = 0
@@ -863,6 +1034,12 @@ class UniFiBouncer:
                     self.sync_decisions(self.current_ips)
                 else:
                     log.debug(f"No changes in stream (maintaining {len(self.current_ips)} IPs)")
+
+                # Refresh blocklists if configured and due
+                try:
+                    self.sync_blocklists()
+                except Exception as e:
+                    log.warning(f"Blocklist sync error: {e}")
 
             except requests.exceptions.RequestException as e:
                 consecutive_errors += 1
@@ -936,10 +1113,21 @@ def main():
         health_status.set_error("Initial UniFi login failed")
         sys.exit(1)
 
+    # Initialize blocklist fetcher if configured
+    blocklist_fetcher = None
+    if BLOCKLIST_URLS:
+        blocklist_fetcher = BlocklistFetcher(BLOCKLIST_URLS, BLOCKLIST_MAX_IPS, ENABLE_IPV6)
+        log.info(f"Blocklist sources: {len(BLOCKLIST_URLS)} URLs configured")
+        log.info(f"Blocklist refresh: every {BLOCKLIST_REFRESH_INTERVAL}s")
+        log.info(f"Blocklist max IPs: {BLOCKLIST_MAX_IPS if BLOCKLIST_MAX_IPS > 0 else 'unlimited'}")
+
     # Create bouncer and run
     bouncer = UniFiBouncer(
         crowdsec, unifi, UNIFI_MAX_GROUP_SIZE, GROUP_PREFIX,
-        ENABLE_IPV6, SYNC_BATCH_SIZE, MAX_IPS
+        ENABLE_IPV6, SYNC_BATCH_SIZE, MAX_IPS,
+        blocklist_fetcher=blocklist_fetcher,
+        blocklist_group_prefix=BLOCKLIST_GROUP_PREFIX,
+        blocklist_refresh_interval=BLOCKLIST_REFRESH_INTERVAL
     )
     log.info(f"IPv6: {'enabled' if ENABLE_IPV6 else 'disabled'}")
 
