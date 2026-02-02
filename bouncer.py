@@ -528,6 +528,8 @@ class UniFiBouncer:
         self.groups = {}  # name -> id mapping
         self._delta_count = 0
         self._full_refresh_interval = 10  # Full refresh every N polling cycles
+        self._processed_decision_ids = set()  # Track decision IDs to avoid reprocessing
+        self._ip_to_decision_ids = {}  # IP -> set of decision IDs (for cleanup)
 
     def _filter_ips(self, ips: set) -> set:
         """Filter IPs based on IPv6 setting."""
@@ -841,24 +843,55 @@ class UniFiBouncer:
 
                 consecutive_errors = 0  # Reset on success
 
-                # Add new bans
+                # Add new bans (with decision ID tracking to avoid reprocessing)
                 added = 0
+                skipped = 0
                 for d in new_decisions:
                     if d.get("type") == "ban" and d.get("scope") == "Ip":
-                        self.current_ips.add(d.get("value"))
-                        added += 1
+                        decision_id = d.get("id")
+                        ip = d.get("value")
+
+                        # Skip already-processed decisions
+                        if decision_id and decision_id in self._processed_decision_ids:
+                            skipped += 1
+                            continue
+
+                        if ip:
+                            self.current_ips.add(ip)
+                            added += 1
+
+                            # Track decision ID
+                            if decision_id:
+                                self._processed_decision_ids.add(decision_id)
+                                if ip not in self._ip_to_decision_ids:
+                                    self._ip_to_decision_ids[ip] = set()
+                                self._ip_to_decision_ids[ip].add(decision_id)
 
                 # Remove expired/deleted
                 removed = 0
                 for d in deleted_decisions:
                     if d.get("scope") == "Ip":
-                        self.current_ips.discard(d.get("value"))
-                        removed += 1
+                        ip = d.get("value")
+                        decision_id = d.get("id")
+
+                        if ip:
+                            self.current_ips.discard(ip)
+                            removed += 1
+
+                            # Clean up decision ID tracking
+                            if decision_id:
+                                self._processed_decision_ids.discard(decision_id)
+                            if ip in self._ip_to_decision_ids:
+                                if decision_id:
+                                    self._ip_to_decision_ids[ip].discard(decision_id)
+                                if not self._ip_to_decision_ids[ip]:
+                                    del self._ip_to_decision_ids[ip]
 
                 if new_decisions or deleted_decisions:
                     log.info(
-                        f"Stream update: +{len(new_decisions)} decisions (+{added} bans), "
-                        f"-{len(deleted_decisions)} decisions (-{removed} removed)"
+                        f"Stream update: +{len(new_decisions)} decisions (+{added} bans, "
+                        f"{skipped} skipped), -{len(deleted_decisions)} decisions (-{removed} removed), "
+                        f"tracking {len(self._processed_decision_ids)} decision IDs"
                     )
                     self.sync_decisions(self.current_ips)
                 else:
