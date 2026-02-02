@@ -19,6 +19,7 @@ import logging
 import threading
 import gc
 import re
+import random
 from http.server import HTTPServer, BaseHTTPRequestHandler
 from typing import Optional, Dict, Any
 from urllib3.exceptions import InsecureRequestWarning
@@ -310,8 +311,54 @@ class UniFiClient:
         """Build full API URL for endpoint."""
         return f"{self.host}/proxy/network/api/s/{self.site}/{endpoint}"
 
+    @staticmethod
+    def _classify_error(status_code: int = 0, exception: Exception = None) -> str:
+        """Classify an API error into a category for better diagnostics.
+
+        Categories:
+        - auth: 401/403 - credential or permission issue
+        - connectivity: connection errors, timeouts, DNS failures
+        - server: 500/502/503/504 - UniFi controller issue
+        - rate_limit: 429 - too many requests
+        - validation: 400/422 - bad request payload
+        - unknown: anything else
+        """
+        if exception:
+            if isinstance(exception, requests.exceptions.Timeout):
+                return "connectivity"
+            if isinstance(exception, requests.exceptions.ConnectionError):
+                return "connectivity"
+            if isinstance(exception, requests.exceptions.SSLError):
+                return "connectivity"
+            return "unknown"
+
+        if status_code in (401, 403):
+            return "auth"
+        if status_code == 429:
+            return "rate_limit"
+        if status_code in (500, 502, 503, 504):
+            return "server"
+        if status_code in (400, 422):
+            return "validation"
+        return "unknown"
+
+    @staticmethod
+    def _backoff_with_jitter(backoff: float, max_backoff: float) -> float:
+        """Calculate next backoff with jitter to avoid thundering herd.
+
+        Uses "full jitter" strategy: sleep = random(0, min(max_backoff, backoff * 2))
+        This spreads retry attempts across a wider time window.
+        """
+        next_backoff = min(backoff * 2, max_backoff)
+        jittered = random.uniform(0, next_backoff)
+        return jittered, next_backoff
+
     def _request_with_retry(self, method: str, url: str, headers: dict, **kwargs) -> requests.Response:
-        """Execute request with exponential backoff for retryable errors."""
+        """Execute request with exponential backoff + jitter for retryable errors.
+
+        Uses full jitter strategy to prevent multiple bouncer instances from
+        retrying in lockstep. Errors are classified for better diagnostics.
+        """
         last_error = None
         backoff = self.initial_backoff
 
@@ -321,45 +368,57 @@ class UniFiClient:
 
                 # Check if we got a retryable status code
                 if resp.status_code in self.RETRYABLE_STATUS_CODES:
+                    error_type = self._classify_error(status_code=resp.status_code)
                     if attempt < self.max_retries:
+                        jittered, backoff = self._backoff_with_jitter(backoff, self.max_backoff)
                         log.warning(
-                            f"UniFi API returned {resp.status_code}, "
-                            f"retrying in {backoff:.1f}s (attempt {attempt + 1}/{self.max_retries + 1})"
+                            f"UniFi API {error_type} error: {resp.status_code}, "
+                            f"retrying in {jittered:.1f}s (attempt {attempt + 1}/{self.max_retries + 1})"
                         )
-                        time.sleep(backoff)
-                        backoff = min(backoff * 2, self.max_backoff)
+                        time.sleep(jittered)
                         continue
                     else:
                         log.error(
-                            f"UniFi API returned {resp.status_code} after {self.max_retries + 1} attempts, giving up"
+                            f"UniFi API {error_type} error: {resp.status_code} "
+                            f"after {self.max_retries + 1} attempts, giving up"
                         )
+
+                # Non-retryable errors: classify and log
+                if resp.status_code >= 400:
+                    error_type = self._classify_error(status_code=resp.status_code)
+                    log.debug(f"UniFi API response: {resp.status_code} ({error_type})")
 
                 return resp
 
             except requests.exceptions.Timeout as e:
                 last_error = e
+                error_type = self._classify_error(exception=e)
                 if attempt < self.max_retries:
+                    jittered, backoff = self._backoff_with_jitter(backoff, self.max_backoff)
                     log.warning(
-                        f"UniFi API timeout, retrying in {backoff:.1f}s "
-                        f"(attempt {attempt + 1}/{self.max_retries + 1})"
+                        f"UniFi API {error_type} error: timeout, "
+                        f"retrying in {jittered:.1f}s (attempt {attempt + 1}/{self.max_retries + 1})"
                     )
-                    time.sleep(backoff)
-                    backoff = min(backoff * 2, self.max_backoff)
+                    time.sleep(jittered)
                 else:
-                    log.error(f"UniFi API timeout after {self.max_retries + 1} attempts")
+                    log.error(f"UniFi API {error_type} error: timeout after {self.max_retries + 1} attempts")
                     raise
 
             except requests.exceptions.ConnectionError as e:
                 last_error = e
+                error_type = self._classify_error(exception=e)
                 if attempt < self.max_retries:
+                    jittered, backoff = self._backoff_with_jitter(backoff, self.max_backoff)
                     log.warning(
-                        f"UniFi API connection error: {e}, retrying in {backoff:.1f}s "
-                        f"(attempt {attempt + 1}/{self.max_retries + 1})"
+                        f"UniFi API {error_type} error: {e}, "
+                        f"retrying in {jittered:.1f}s (attempt {attempt + 1}/{self.max_retries + 1})"
                     )
-                    time.sleep(backoff)
-                    backoff = min(backoff * 2, self.max_backoff)
+                    time.sleep(jittered)
                 else:
-                    log.error(f"UniFi API connection failed after {self.max_retries + 1} attempts: {e}")
+                    log.error(
+                        f"UniFi API {error_type} error: connection failed "
+                        f"after {self.max_retries + 1} attempts: {e}"
+                    )
                     raise
 
         # Should not reach here, but just in case
@@ -377,25 +436,28 @@ class UniFiClient:
         try:
             resp = self._request_with_retry(method, url, headers, **kwargs)
         except requests.exceptions.RequestException as e:
-            log.error(f"API request failed: {method} {endpoint} -> {e}")
+            error_type = self._classify_error(exception=e)
+            log.error(f"API {error_type} error: {method} {endpoint} -> {e}")
             health_status.set_unifi_connected(False)
-            health_status.set_error(f"UniFi API error: {e}")
+            health_status.set_error(f"UniFi API {error_type} error: {e}")
             return None
 
         if resp.status_code == 401:
-            log.warning("Session expired, re-authenticating...")
+            log.warning("Session expired (auth error), re-authenticating...")
             if self.login():
                 if self.csrf_token:
                     headers["X-CSRF-Token"] = self.csrf_token
                 try:
                     resp = self._request_with_retry(method, url, headers, **kwargs)
                 except requests.exceptions.RequestException as e:
-                    log.error(f"API request failed after re-auth: {method} {endpoint} -> {e}")
-                    health_status.set_error(f"UniFi API error after re-auth: {e}")
+                    error_type = self._classify_error(exception=e)
+                    log.error(f"API {error_type} error after re-auth: {method} {endpoint} -> {e}")
+                    health_status.set_error(f"UniFi API {error_type} error after re-auth: {e}")
                     return None
 
         if resp.status_code >= 400:
-            error_msg = f"API error: {method} {endpoint} -> {resp.status_code}: {resp.text[:200]}"
+            error_type = self._classify_error(status_code=resp.status_code)
+            error_msg = f"API {error_type} error: {method} {endpoint} -> {resp.status_code}: {resp.text[:200]}"
             log.error(error_msg)
             health_status.set_error(error_msg)
             return None
