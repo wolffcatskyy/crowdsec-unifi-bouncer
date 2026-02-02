@@ -48,6 +48,7 @@ ENABLE_IPV6 = os.getenv("ENABLE_IPV6", "false").lower() == "true"
 
 GROUP_PREFIX = os.getenv("GROUP_PREFIX", "crowdsec-ban")
 LOG_LEVEL = os.getenv("LOG_LEVEL", "INFO")
+LOG_FORMAT = os.getenv("LOG_FORMAT", "text")  # "text" or "json"
 
 # Health check configuration
 HEALTH_PORT = int(os.getenv("HEALTH_PORT", "8080"))
@@ -65,12 +66,39 @@ UNIFI_MAX_BACKOFF = float(os.getenv("UNIFI_MAX_BACKOFF", "60.0"))  # seconds
 TELEMETRY_ENABLED = os.getenv("TELEMETRY_ENABLED", "true").lower() == "true"
 TELEMETRY_URL = "https://bouncer-telemetry.ms2738.workers.dev/ping"
 
+
+class JSONLogFormatter(logging.Formatter):
+    """Structured JSON log formatter for machine-readable output.
+
+    Each log line is a JSON object with consistent keys:
+      - ts: ISO 8601 timestamp
+      - level: log level (INFO, WARNING, ERROR, etc.)
+      - msg: the log message
+      - logger: logger name
+    """
+
+    def format(self, record: logging.LogRecord) -> str:
+        log_entry = {
+            "ts": self.formatTime(record, datefmt="%Y-%m-%dT%H:%M:%S"),
+            "level": record.levelname,
+            "msg": record.getMessage(),
+            "logger": record.name,
+        }
+        return json.dumps(log_entry, separators=(",", ":"))
+
+
 # Setup logging
-logging.basicConfig(
-    level=getattr(logging, LOG_LEVEL.upper(), logging.INFO),
-    format="%(asctime)s [%(levelname)s] %(message)s",
-    datefmt="%Y-%m-%d %H:%M:%S"
-)
+if LOG_FORMAT.lower() == "json":
+    handler = logging.StreamHandler()
+    handler.setFormatter(JSONLogFormatter())
+    logging.root.addHandler(handler)
+    logging.root.setLevel(getattr(logging, LOG_LEVEL.upper(), logging.INFO))
+else:
+    logging.basicConfig(
+        level=getattr(logging, LOG_LEVEL.upper(), logging.INFO),
+        format="%(asctime)s [%(levelname)s] %(message)s",
+        datefmt="%Y-%m-%d %H:%M:%S"
+    )
 log = logging.getLogger(__name__)
 
 
@@ -863,6 +891,14 @@ class UniFiBouncer:
                     self.sync_decisions(self.current_ips)
                 else:
                     log.debug(f"No changes in stream (maintaining {len(self.current_ips)} IPs)")
+
+                # Cycle summary log line (useful for JSON log aggregation)
+                log.info(
+                    f"cycle_summary: ips={len(self.current_ips)} "
+                    f"groups={len(self.groups)} "
+                    f"added={added} removed={removed} "
+                    f"cycle={self._delta_count}"
+                )
 
             except requests.exceptions.RequestException as e:
                 consecutive_errors += 1
