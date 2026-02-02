@@ -52,6 +52,7 @@ LOG_LEVEL = os.getenv("LOG_LEVEL", "INFO")
 # Health check configuration
 HEALTH_PORT = int(os.getenv("HEALTH_PORT", "8080"))
 HEALTH_ENABLED = os.getenv("HEALTH_ENABLED", "true").lower() == "true"
+HEALTH_STATUS_FILE = os.getenv("HEALTH_STATUS_FILE", "")  # Optional: write status to file
 
 # Batch processing configuration (for memory management)
 SYNC_BATCH_SIZE = int(os.getenv("SYNC_BATCH_SIZE", "1000"))  # IPs per batch during sync
@@ -106,6 +107,7 @@ class HealthStatus:
         self._unifi_connected = False
         self._last_sync_time: Optional[float] = None
         self._last_sync_ips: int = 0
+        self._last_sync_groups: int = 0
         self._last_error: Optional[str] = None
         self._startup_time = time.time()
 
@@ -117,10 +119,11 @@ class HealthStatus:
         with self._lock:
             self._unifi_connected = connected
 
-    def set_last_sync(self, ip_count: int):
+    def set_last_sync(self, ip_count: int, group_count: int = 0):
         with self._lock:
             self._last_sync_time = time.time()
             self._last_sync_ips = ip_count
+            self._last_sync_groups = group_count
             self._last_error = None
 
     def set_error(self, error: str):
@@ -142,9 +145,25 @@ class HealthStatus:
                 "unifi_connected": self._unifi_connected,
                 "last_sync_time": self._last_sync_time,
                 "last_sync_ips": self._last_sync_ips,
+                "group_count": self._last_sync_groups,
                 "last_error": self._last_error,
                 "memory_mb": round(get_memory_usage_mb(), 1)
             }
+
+    def write_status_file(self):
+        """Write current status to HEALTH_STATUS_FILE if configured.
+
+        This allows monitoring tools that cannot make HTTP requests
+        (e.g., cron scripts, file-based monitors) to check bouncer health.
+        """
+        if not HEALTH_STATUS_FILE:
+            return
+        try:
+            status = self.get_status()
+            with open(HEALTH_STATUS_FILE, "w") as f:
+                json.dump(status, f, indent=2)
+        except Exception as e:
+            log.debug(f"Failed to write status file: {e}")
 
 
 # Global health status instance
@@ -748,7 +767,8 @@ class UniFiBouncer:
         log_memory_usage("sync_complete")
 
         # Update health status
-        health_status.set_last_sync(len(ips))
+        health_status.set_last_sync(len(ips), len(self.groups))
+        health_status.write_status_file()
 
     def initial_sync(self):
         """Do initial full sync from CrowdSec."""
