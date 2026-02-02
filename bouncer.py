@@ -63,7 +63,7 @@ UNIFI_MAX_BACKOFF = float(os.getenv("UNIFI_MAX_BACKOFF", "60.0"))  # seconds
 
 # Anonymous telemetry (enabled by default, set TELEMETRY_ENABLED=false to disable)
 TELEMETRY_ENABLED = os.getenv("TELEMETRY_ENABLED", "true").lower() == "true"
-TELEMETRY_URL = "https://bouncer-telemetry.ms2738.workers.dev/ping"
+TELEMETRY_URL = os.getenv("TELEMETRY_URL", "https://telemetry.srq.wtf/ping")
 
 # Setup logging
 logging.basicConfig(
@@ -800,7 +800,7 @@ class UniFiBouncer:
 
             self.sync_decisions(ips)
             # Send telemetry after initial sync
-            send_telemetry(len(self.current_ips))
+            send_telemetry(len(self.current_ips), len(self.groups))
 
         except requests.exceptions.RequestException as e:
             log.error(f"Initial stream sync failed: {e}")
@@ -809,7 +809,7 @@ class UniFiBouncer:
             # Fall back to regular query
             log.info("Falling back to regular decision query...")
             self.initial_sync()
-            send_telemetry(len(self.current_ips))
+            send_telemetry(len(self.current_ips), len(self.groups))
 
         # Continuous polling
         log.info(f"Starting continuous polling (interval: {UPDATE_INTERVAL}s)...")
@@ -879,12 +879,24 @@ class UniFiBouncer:
                     )
 
 
-def send_telemetry(ip_count: int = 0):
-    """Send anonymous startup ping with version and IP count."""
+def send_telemetry(ip_count: int = 0, group_count: int = 0):
+    """Send anonymous startup ping with version, IP count, and group count.
+
+    Telemetry payload (all anonymous, no PII):
+    - tool: always "bouncer"
+    - version: bouncer version string
+    - ip_count: number of IPs currently synced
+    - group_count: number of firewall groups
+    """
     if not TELEMETRY_ENABLED:
         return
     try:
-        payload = {"tool": "bouncer", "version": __version__, "ip_count": ip_count}
+        payload = {
+            "tool": "bouncer",
+            "version": __version__,
+            "ip_count": ip_count,
+            "group_count": group_count,
+        }
         resp = requests.post(TELEMETRY_URL, json=payload, timeout=5)
         if resp.status_code == 200:
             data = resp.json()
