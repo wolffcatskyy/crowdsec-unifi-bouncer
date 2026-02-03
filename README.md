@@ -8,7 +8,7 @@ Drop-in install of the official [CrowdSec firewall bouncer](https://github.com/c
 
 **The solution:** An installer and three small scripts that handle all of this automatically. Install once, forget about it.
 
-> **v2.0**: Replaced the old Python/Docker bouncer that used the UniFi controller API. That approach hit MongoDB write storms that froze routers at 2000+ IPs. The native bouncer uses kernel-level ipset — handles 100k+ IPs, 15MB RAM, no controller API, no credentials. See [Migration from Python Bouncer](#migration-from-python-bouncer) if upgrading from v1.x.
+> **v2.0**: Replaced the old Python/Docker bouncer that used the UniFi controller API. That approach hit MongoDB write storms that froze routers at 2000+ IPs. The native bouncer uses ipset and iptables directly — handles 100k+ IPs, 15MB RAM, no controller API, no credentials. See [Migration from Python Bouncer](#migration-from-python-bouncer) if upgrading from v1.x.
 
 ## What's Included
 
@@ -148,7 +148,7 @@ This is the core of what this repo provides. None of this is documented by Ubiqu
 
 UniFi OS is a locked-down Debian derivative. Ubiquiti doesn't document or officially support running custom services on these devices. Through testing across firmware updates and reboots, we discovered:
 
-- **ipset and iptables are available and functional** — UniFi OS ships with full ipset/iptables support, but Ubiquiti doesn't expose this to users. You can create custom ipsets and insert rules into INPUT/FORWARD chains alongside the controller's managed rules. This is how the bouncer blocks IPs at the kernel level — no controller API, no MongoDB, no 10k group limits
+- **ipset and iptables are available and functional** — UniFi OS ships with full ipset/iptables support, but Ubiquiti doesn't expose this to users. You can create custom ipsets and insert rules into INPUT/FORWARD chains alongside the controller's managed rules. This is how the bouncer blocks IPs at the firewall level — no controller API, no MongoDB, no 10k group limits
 - **This is the only way to import custom blocklists** — UniFi has no built-in mechanism to add your own IP blocklists. Their Threat Management is a black box you can't feed custom data into. There's no blocklist import in the UI, no API for it, nothing. ipset is the only path to enforcing CrowdSec decisions, community threat intel, or any external blocklist on these devices
 - **`/data` persists across firmware updates** — but nothing else is guaranteed
 - **systemd service symlinks in `/etc/systemd/system/` get wiped** — your service vanishes after an update
@@ -185,7 +185,7 @@ If you were using the previous Python-based bouncer (v1.x of this repo):
 5. Register a new bouncer in CrowdSec (`cscli bouncers add`) or reuse the existing API key
 
 The native bouncer uses ipset/iptables directly instead of the UniFi controller API:
-- **No MongoDB thrashing** — the v1.x API approach wrote every IP update to the controller's MongoDB, causing router freezes at 2000+ IPs. ipset is a kernel-level operation with zero database overhead
+- **No MongoDB thrashing** — the v1.x API approach wrote every IP update to the controller's MongoDB, causing router freezes at 2000+ IPs. ipset operates via netfilter with zero database overhead
 - **No IP cap** — handle 100k+ IPs without stability concerns (v1.x had to cap at 2000)
 - **No UniFi credentials needed** — no controller API, no login tokens, no CSRF
 - **No Docker overhead** — single Go binary, 15MB RAM vs 256MB+
@@ -248,7 +248,7 @@ This bouncer is part of a three-project suite that gives UniFi full CrowdSec int
 |---------|------|-------------|
 | **[crowdsec-unifi-parser](https://github.com/wolffcatskyy/crowdsec-unifi-parser)** | Visibility | Deploys iptables LOG rules on your UDM/UDR so CrowdSec can detect port scans, brute force, and other threats from your firewall logs |
 | **[crowdsec-blocklist-import](https://github.com/wolffcatskyy/crowdsec-blocklist-import)** | Intelligence | Imports 60,000+ IPs from 28 public threat feeds into CrowdSec — preemptive blocking before attackers even connect |
-| **This repo** | Enforcement | Pushes CrowdSec ban decisions to your UniFi firewall at the kernel level |
+| **This repo** | Enforcement | Pushes CrowdSec ban decisions to your UniFi firewall via ipset/iptables |
 
 Together: the **parser** detects threats, **blocklist-import** feeds threat intel, and this **bouncer** enforces bans. A complete detect → decide → enforce feedback loop on UniFi hardware for free.
 
