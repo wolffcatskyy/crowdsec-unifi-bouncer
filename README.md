@@ -183,11 +183,12 @@ If you were using the previous Python-based bouncer (v1.x of this repo):
 5. Register a new bouncer in CrowdSec (`cscli bouncers add`) or reuse the existing API key
 
 The native bouncer uses ipset/iptables directly instead of the UniFi controller API:
-- No UniFi credentials needed
-- No Docker overhead
-- Faster response (10s polling vs 60s)
-- No group size limits or API rate limiting
-- Survives controller API outages
+- **No MongoDB thrashing** — the v1.x API approach wrote every IP update to the controller's MongoDB, causing router freezes at 2000+ IPs. ipset is a kernel-level operation with zero database overhead
+- **No IP cap** — handle 100k+ IPs without stability concerns (v1.x had to cap at 2000)
+- **No UniFi credentials needed** — no controller API, no login tokens, no CSRF
+- **No Docker overhead** — single Go binary, 15MB RAM vs 256MB+
+- **Faster response** — 10s polling vs 60s
+- **Survives controller API outages** — iptables doesn't care if the controller is down
 
 ## Uninstall
 
