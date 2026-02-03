@@ -1,7 +1,11 @@
 [Unit]
 Description=CrowdSec Firewall Bouncer
-After=network.target
+After=network.target ssd1.mount
 Wants=network.target
+# ssd1.mount: On UDR, /data is a symlink to /ssd1/.data which may not be
+# mounted yet at boot. Without this, the service can fail to start.
+# On UDM SE this is harmless (mount unit doesn't exist, dependency is ignored).
+RequiresMountsFor=/data/crowdsec-bouncer
 
 [Service]
 Type=simple
