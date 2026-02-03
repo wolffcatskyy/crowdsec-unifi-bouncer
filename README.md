@@ -144,8 +144,9 @@ cscli bouncers list
 
 This is the core of what this repo provides. None of this is documented by Ubiquiti.
 
-UniFi OS is a locked-down Debian derivative. Through testing across firmware updates and reboots, we discovered:
+UniFi OS is a locked-down Debian derivative. Ubiquiti doesn't document or officially support running custom services on these devices. Through testing across firmware updates and reboots, we discovered:
 
+- **ipset and iptables are available and functional** — UniFi OS ships with full ipset/iptables support, but Ubiquiti doesn't expose this to users. You can create custom ipsets and insert rules into INPUT/FORWARD chains alongside the controller's managed rules. This is how the bouncer blocks IPs at the kernel level — no controller API, no MongoDB, no 10k group limits
 - **`/data` persists across firmware updates** — but nothing else is guaranteed
 - **systemd service symlinks in `/etc/systemd/system/` get wiped** — your service vanishes after an update
 - **iptables rules are reset** — the bouncer runs but silently stops blocking
