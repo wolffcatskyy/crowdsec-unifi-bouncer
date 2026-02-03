@@ -1,0 +1,28 @@
+mode: ipset
+update_frequency: 10s
+log_mode: file
+log_dir: /data/crowdsec-bouncer/log/
+log_level: info
+log_compression: true
+log_max_size: 100
+log_max_backups: 3
+log_max_age: 30
+api_url: http://YOUR_CROWDSEC_LAPI:8081/
+api_key: YOUR_BOUNCER_API_KEY
+insecure_skip_verify: false
+disable_ipv6: true
+deny_action: DROP
+deny_log: false
+supported_decisions_types:
+  - ban
+blacklists_ipv4: crowdsec-blacklists
+blacklists_ipv6: crowdsec6-blacklists
+ipset_type: nethash
+iptables_chains:
+  - INPUT
+  - FORWARD
+iptables_add_rule_comments: true
+prometheus:
+  enabled: false
+  listen_addr: 127.0.0.1
+  listen_port: 60601

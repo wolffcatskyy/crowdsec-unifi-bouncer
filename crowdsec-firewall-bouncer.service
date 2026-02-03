@@ -1,0 +1,16 @@
+[Unit]
+Description=CrowdSec Firewall Bouncer
+After=network.target
+Wants=network.target
+
+[Service]
+Type=simple
+ExecStart=/data/crowdsec-bouncer/crowdsec-firewall-bouncer -c /data/crowdsec-bouncer/crowdsec-firewall-bouncer.yaml
+ExecStartPre=/data/crowdsec-bouncer/setup.sh
+Restart=always
+RestartSec=10
+StandardOutput=journal
+StandardError=journal
+
+[Install]
+WantedBy=multi-user.target
