@@ -142,18 +142,23 @@ cscli bouncers list
 
 ## How It Survives Firmware Updates
 
-UniFi OS firmware updates preserve `/data` but can wipe:
-- systemd service symlinks in `/etc/systemd/system/`
-- iptables rules
-- cron jobs
+This is the core of what this repo provides. None of this is documented by Ubiquiti.
 
-Three mechanisms handle this:
+UniFi OS is a locked-down Debian derivative. Through testing across firmware updates and reboots, we discovered:
 
-1. **`setup.sh` (ExecStartPre)** — Runs before the bouncer starts. Re-creates the ipset, re-adds iptables rules, re-links the systemd service file. After a firmware update reboot, the service starts and `setup.sh` rebuilds everything.
+- **`/data` persists across firmware updates** — but nothing else is guaranteed
+- **systemd service symlinks in `/etc/systemd/system/` get wiped** — your service vanishes after an update
+- **iptables rules are reset** — the bouncer runs but silently stops blocking
+- **The UniFi controller reprovisioning process can remove custom iptables rules at any time** — not just during updates, but during normal operation
+- **On UDR devices, `/data` is a symlink to `/ssd1/.data`** — which isn't mounted yet at early boot, causing a race condition
 
-2. **`ensure-rules.sh` (cron, every 5 min)** — The UniFi controller can reprovision firewall rules during normal operation, removing custom iptables rules. This cron job silently re-adds them.
+Three mechanisms work together to handle all of this:
 
-3. **Everything in `/data/crowdsec-bouncer/`** — Binary, config, scripts, service file, logs. One persistent directory.
+1. **`setup.sh` (ExecStartPre)** — Runs before every bouncer start. Loads ipset kernel modules, creates the ipset, adds iptables rules, and re-links the systemd service file if it was wiped. After a firmware update reboot, this single script rebuilds everything.
+
+2. **`ensure-rules.sh` (cron, every 5 min)** — Catches the sneaky one: the UniFi controller can reprovision firewall rules during normal operation, silently removing your custom iptables rules while the bouncer is still running. This cron job detects and re-adds them.
+
+3. **Everything in `/data/crowdsec-bouncer/`** — Binary, config, scripts, service file, logs. One persistent directory that survives whatever UniFi OS throws at it.
 
 ## Resource Usage
 
