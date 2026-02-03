@@ -7,7 +7,7 @@
 
 Drop-in install of the official [CrowdSec firewall bouncer](https://github.com/crowdsecurity/cs-firewall-bouncer) on UniFi OS devices — with persistence that survives firmware updates, reboots, and controller reprovisioning.
 
-> **New to CrowdSec?** [CrowdSec](https://crowdsec.net) is a free, open-source security engine that detects and blocks malicious IPs. It works like fail2ban but with crowd-sourced threat intelligence and a modern bouncer ecosystem. Install it, connect bouncers to your firewalls/proxies, and threats get blocked network-wide.
+> **New to CrowdSec?** [CrowdSec](https://crowdsec.net) is a free, open-source security engine that detects and blocks malicious IPs. It works like fail2ban but with crowd-sourced threat intelligence and a modern bouncer ecosystem. Install it, connect bouncers to your firewalls/proxies, and threats get blocked network-wide. Get started with the [official install guide](https://docs.crowdsec.net/docs/getting_started/install_crowdsec/).
 
 **The problem:** The official bouncer binary works perfectly on UniFi devices, but UniFi OS doesn't make it easy to keep it running. Firmware updates wipe your iptables rules. Controller reprovisioning silently removes custom firewall rules. There's no package manager. Systemd service links disappear. You install it, it works, then one day it's quietly stopped blocking anything.
 
@@ -252,7 +252,7 @@ This bouncer is part of a three-project suite that gives UniFi full CrowdSec int
 | Project | Role | What it does |
 |---------|------|-------------|
 | **[crowdsec-unifi-parser](https://github.com/wolffcatskyy/crowdsec-unifi-parser)** | Visibility | Deploys iptables LOG rules on your UDM/UDR so CrowdSec can detect port scans, brute force, and other threats from your firewall logs |
-| **[crowdsec-blocklist-import](https://github.com/wolffcatskyy/crowdsec-blocklist-import)** | Intelligence | Imports 60,000+ IPs from 28 public threat feeds into CrowdSec — preemptive blocking before attackers even connect |
+| **[crowdsec-blocklist-import](https://github.com/wolffcatskyy/crowdsec-blocklist-import)** | Intelligence | Imports 120,000+ IPs from 36 public threat feeds into CrowdSec — preemptive blocking before attackers even connect |
 | **This repo** | Enforcement | Pushes CrowdSec ban decisions to your UniFi firewall via ipset/iptables |
 
 Together: the **parser** detects threats, **blocklist-import** feeds threat intel, and this **bouncer** enforces bans. A complete detect → decide → enforce feedback loop on UniFi hardware for free.
