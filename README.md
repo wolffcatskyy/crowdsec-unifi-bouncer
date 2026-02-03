@@ -147,6 +147,7 @@ This is the core of what this repo provides. None of this is documented by Ubiqu
 UniFi OS is a locked-down Debian derivative. Ubiquiti doesn't document or officially support running custom services on these devices. Through testing across firmware updates and reboots, we discovered:
 
 - **ipset and iptables are available and functional** — UniFi OS ships with full ipset/iptables support, but Ubiquiti doesn't expose this to users. You can create custom ipsets and insert rules into INPUT/FORWARD chains alongside the controller's managed rules. This is how the bouncer blocks IPs at the kernel level — no controller API, no MongoDB, no 10k group limits
+- **This is the only way to import custom blocklists** — UniFi has no built-in mechanism to add your own IP blocklists. Their Threat Management is a black box you can't feed custom data into. There's no blocklist import in the UI, no API for it, nothing. ipset is the only path to enforcing CrowdSec decisions, community threat intel, or any external blocklist on these devices
 - **`/data` persists across firmware updates** — but nothing else is guaranteed
 - **systemd service symlinks in `/etc/systemd/system/` get wiped** — your service vanishes after an update
 - **iptables rules are reset** — the bouncer runs but silently stops blocking
