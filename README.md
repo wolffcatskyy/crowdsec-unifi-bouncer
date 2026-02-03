@@ -238,6 +238,18 @@ systemctl daemon-reload
 systemctl start crowdsec-firewall-bouncer
 ```
 
+## Companion: Blocklist Import
+
+Since UniFi has no way to import blocklists, and CrowdSec's free tier only includes ~15k community IPs, we built a companion tool:
+
+**[crowdsec-blocklist-import](https://github.com/wolffcatskyy/crowdsec-blocklist-import)** — imports 60,000+ IPs from 28 public threat feeds (Spamhaus, Firehol, Tor exit nodes, Shodan scanners, etc.) directly into CrowdSec. Runs daily via cron or Docker.
+
+The two repos work together:
+1. **blocklist-import** feeds threat intel into your CrowdSec LAPI
+2. **This bouncer** enforces it on your UniFi firewall at the kernel level
+
+The result: premium-grade IP blocking on UniFi hardware for free — no CrowdSec subscription, no UniFi add-ons, no third-party firewall.
+
 ## License
 
 MIT — see [LICENSE](LICENSE)
