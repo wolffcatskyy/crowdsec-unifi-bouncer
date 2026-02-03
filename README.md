@@ -1,19 +1,12 @@
 # CrowdSec Firewall Bouncer for UniFi OS
 
-Install and persist the official [CrowdSec firewall bouncer](https://github.com/crowdsecurity/cs-firewall-bouncer) on UniFi OS devices (UDM, UDM SE, UDR, etc.) with automatic recovery from firmware updates.
+Drop-in install of the official [CrowdSec firewall bouncer](https://github.com/crowdsecurity/cs-firewall-bouncer) on UniFi OS devices — with persistence that survives firmware updates, reboots, and controller reprovisioning.
 
-> **v2.0 — Native Bouncer**: This repo previously contained a custom Python bouncer that used the UniFi controller API. That approach has been replaced by the official CrowdSec `crowdsec-firewall-bouncer` Go binary running directly on the device with ipset/iptables. Faster, simpler, no UniFi credentials needed. See [Migration from Python Bouncer](#migration-from-python-bouncer) if upgrading.
+**The problem:** The official bouncer binary works perfectly on UniFi devices, but UniFi OS doesn't make it easy to keep it running. Firmware updates wipe your iptables rules. Controller reprovisioning silently removes custom firewall rules. There's no package manager. Systemd service links disappear. You install it, it works, then one day it's quietly stopped blocking anything.
 
-## Why This Exists
+**The solution:** An installer and three small scripts that handle all of this automatically. Install once, forget about it.
 
-UniFi OS devices run a custom Debian-based Linux. The official CrowdSec firewall bouncer works on them, but:
-
-- **Firmware updates can wipe iptables rules** — the bouncer keeps running but stops blocking
-- **Controller reprovisioning removes firewall rules** — same problem, different trigger
-- **No package manager** — you can't `apt install` the bouncer
-- **`/data` survives updates** — but systemd service links and cron jobs may not
-
-This repo provides installation scripts and persistence mechanisms that handle all of this.
+> **v2.0**: Replaced the old Python/Docker bouncer that used the UniFi controller API. That approach hit MongoDB write storms that froze routers at 2000+ IPs. The native bouncer uses kernel-level ipset — handles 100k+ IPs, 15MB RAM, no controller API, no credentials. See [Migration from Python Bouncer](#migration-from-python-bouncer) if upgrading from v1.x.
 
 ## What's Included
 
