@@ -62,8 +62,8 @@ if [ ! -f "$BOUNCER_DIR/crowdsec-firewall-bouncer.yaml" ]; then
     }
 fi
 
-# Install scripts
-for script in setup.sh ensure-rules.sh; do
+# Install scripts and service file
+for script in setup.sh ensure-rules.sh crowdsec-firewall-bouncer.service; do
     if [ -f "/tmp/$script" ] || [ -f "$(dirname "$0")/$script" ]; then
         cp "$(dirname "$0")/$script" "$BOUNCER_DIR/" 2>/dev/null || true
     fi
