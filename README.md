@@ -183,27 +183,33 @@ Bouncer process on UDM SE / UDR:
 
 **Important:** This table shows the bouncer process only. The ipset itself consumes additional kernel memory that scales with the number of entries. This kernel memory is not visible in the bouncer's RSS — use `cat /proc/meminfo | grep MemAvailable` to monitor actual device memory.
 
-## Memory and ipset Limits
+## Memory Safety
 
-The `maxelem` value in `setup.sh` controls the maximum ipset size. We are currently testing to determine safe limits per device and will update this section with results.
+`ensure-rules.sh` monitors your device's available memory every 5 minutes. If `MemAvailable` drops below a threshold (default 200MB), it stops the bouncer to prevent a crash. The ipset entries stay in place — your firewall keeps blocking the IPs already loaded. Nothing is lost.
 
-In the meantime, `maxelem` defaults have been reduced to conservative values:
+Every run logs the current ipset count and available memory to `/data/crowdsec-bouncer/log/memory.log`:
 
-| Device | RAM | Default maxelem | Status |
-|--------|-----|-----------------|--------|
-| UDM SE | 4 GB | 60,000 | Testing* |
-| UDM Pro | 4 GB | 60,000 | Untested — need testers |
-| UDM Pro Max | 8 GB | 60,000 | Untested — need testers |
-| UDR | 2 GB | 20,000 | Testing* |
-| UDM | 4 GB | 60,000 | Untested — need testers |
-| USG Pro | 2 GB | 20,000 | Untested — need testers |
-| UCG Ultra | 2 GB | 20,000 | Untested — need testers |
+```
+2026-02-04 05:00 entries=12000 mem_avail=1200000kB bouncer=active
+2026-02-04 05:05 entries=24000 mem_avail=900000kB bouncer=active
+2026-02-04 05:10 entries=38000 mem_avail=600000kB bouncer=active
+2026-02-04 05:15 GUARDRAIL: stopped bouncer at 52000 entries, mem_avail=190000kB
+```
 
-\* 120K+ decisions crashed both the UDM SE and UDR. Current limits are arbitrary conservative starting points, not tested thresholds.
+This tells you exactly how many entries your device can handle under its actual workload — which varies depending on what UniFi apps you run (Protect, Talk, Access all consume different amounts of RAM).
 
-**Help us find safe limits:** If you're running this on any UniFi device, we'd love your data. Open an issue with your device model, RAM, `maxelem` setting, number of decisions loaded, and `MemAvailable` from `/proc/meminfo`. We'll use real-world reports to update this table.
+**Tuning the threshold:**
 
-Edit `maxelem` in `setup.sh` to match your device, or set the `MAXELEM` environment variable.
+```bash
+# Lower threshold for devices with less headroom
+MEM_THRESHOLD=150000 /data/crowdsec-bouncer/ensure-rules.sh
+
+# Or edit the default in the script
+```
+
+**After the guardrail triggers:** The bouncer is stopped but protection continues (ipset entries remain). Check the memory log to understand your device's capacity, then adjust `maxelem` in `setup.sh` to stay within safe range and restart the bouncer.
+
+The `maxelem` value in `setup.sh` provides a hard cap on ipset size (default 60,000). Set this to match your device's observed capacity from the memory log.
 
 **CrowdSec Console warning:** If your CrowdSec instance is enrolled in the [CrowdSec Console](https://app.crowdsec.net) with `console_management` enabled, the console can push large numbers of blocklist decisions via CAPI. These bypass any local controls and are loaded by the bouncer like any other decision. Check with `cscli console status` and disable with `cscli console disable console_management` if needed.
 
