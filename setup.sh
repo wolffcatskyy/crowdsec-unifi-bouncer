@@ -7,6 +7,10 @@ set -e
 
 BOUNCER_DIR="/data/crowdsec-bouncer"
 IPSET_NAME="crowdsec-blacklists"
+# Maximum ipset entries. Tune for your device's available RAM.
+# We are testing to find safe limits — these are conservative starting points.
+# UDM SE (4GB): 60000, UDR (2GB): 20000
+MAXELEM="${MAXELEM:-60000}"
 
 # Ensure ipset kernel modules are loaded
 modprobe ip_set 2>/dev/null || true
@@ -17,7 +21,7 @@ mkdir -p "$BOUNCER_DIR/log"
 
 # Create ipset if it doesn't exist
 if ! ipset list "$IPSET_NAME" >/dev/null 2>&1; then
-    ipset create "$IPSET_NAME" hash:net maxelem 131072 timeout 0
+    ipset create "$IPSET_NAME" hash:net maxelem "$MAXELEM" timeout 0
     echo "Created $IPSET_NAME ipset"
 fi
 
