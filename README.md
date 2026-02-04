@@ -13,9 +13,9 @@ Drop-in install of the official [CrowdSec firewall bouncer](https://github.com/c
 
 **The solution:** An installer and three small scripts that handle all of this automatically. Install once, forget about it.
 
-> **v2.0**: Replaced the old Python/Docker bouncer that used the UniFi controller API. That approach hit MongoDB write storms that froze routers at 2000+ IPs. The native bouncer uses ipset and iptables directly — no controller API, no credentials, 15MB process RAM. See [Migration from Python Bouncer](#migration-from-python-bouncer) if upgrading from v1.x.
+> **v2.0**: Replaced the old Python/Docker bouncer that used the UniFi controller API. That approach hit MongoDB write storms that froze routers at 2000+ IPs. The native bouncer uses ipset and iptables directly — 100K+ IPs*, no controller API, no credentials, 15MB process RAM. See [Migration from Python Bouncer](#migration-from-python-bouncer) if upgrading from v1.x. *Safe limits per device are [currently being tested](#memory-and-ipset-limits).
 >
-> **⚠️ Memory warning:** Large decision counts can crash UniFi devices. The bouncer loads all decisions from your LAPI into a kernel ipset — each entry consumes kernel memory on top of the bouncer process. We are currently testing to determine safe limits per device. If you are importing external blocklists (e.g. via [crowdsec-blocklist-import](https://github.com/wolffcatskyy/crowdsec-blocklist-import)), start small and monitor your device's available memory. The `maxelem` value in `setup.sh` is hardcoded at 131072 — tune this down for your device. See [Memory and ipset Limits](#memory-and-ipset-limits).
+> **⚠️ Memory warning:** Large decision counts can crash UniFi devices. The bouncer loads all decisions from your LAPI into a kernel ipset — each entry consumes kernel memory on top of the bouncer process. We are currently testing to determine safe limits per device. If you are importing external blocklists (e.g. via [crowdsec-blocklist-import](https://github.com/wolffcatskyy/crowdsec-blocklist-import)), start small and monitor your device's available memory. See [Memory and ipset Limits](#memory-and-ipset-limits).
 
 ## What's Included
 
@@ -189,12 +189,21 @@ The `maxelem` value in `setup.sh` controls the maximum ipset size. We are curren
 
 In the meantime, `maxelem` defaults have been reduced to conservative values:
 
-| Device | RAM | Default maxelem |
-|--------|-----|-----------------|
-| UDM SE | 4 GB | 60,000 |
-| UDR | 2 GB | 20,000 |
+| Device | RAM | Default maxelem | Status |
+|--------|-----|-----------------|--------|
+| UDM SE | 4 GB | 60,000 | Testing* |
+| UDM Pro | 4 GB | 60,000 | Untested — need testers |
+| UDM Pro Max | 8 GB | 60,000 | Untested — need testers |
+| UDR | 2 GB | 20,000 | Testing* |
+| UDM | 4 GB | 60,000 | Untested — need testers |
+| USG Pro | 2 GB | 20,000 | Untested — need testers |
+| UCG Ultra | 2 GB | 20,000 | Untested — need testers |
 
-Edit `maxelem` in `setup.sh` to match your device. These limits are arbitrary safe starting points — not tested thresholds. Loading 120K+ decisions crashed both devices listed above.
+\* 120K+ decisions crashed both the UDM SE and UDR. Current limits are arbitrary conservative starting points, not tested thresholds.
+
+**Help us find safe limits:** If you're running this on any UniFi device, we'd love your data. Open an issue with your device model, RAM, `maxelem` setting, number of decisions loaded, and `MemAvailable` from `/proc/meminfo`. We'll use real-world reports to update this table.
+
+Edit `maxelem` in `setup.sh` to match your device, or set the `MAXELEM` environment variable.
 
 **CrowdSec Console warning:** If your CrowdSec instance is enrolled in the [CrowdSec Console](https://app.crowdsec.net) with `console_management` enabled, the console can push large numbers of blocklist decisions via CAPI. These bypass any local controls and are loaded by the bouncer like any other decision. Check with `cscli console status` and disable with `cscli console disable console_management` if needed.
 
@@ -271,7 +280,7 @@ This bouncer is part of a three-project suite that gives UniFi full CrowdSec int
 | Project | Role | What it does |
 |---------|------|-------------|
 | **[crowdsec-unifi-parser](https://github.com/wolffcatskyy/crowdsec-unifi-parser)** | Visibility | Deploys iptables LOG rules on your UDM/UDR so CrowdSec can detect port scans, brute force, and other threats from your firewall logs |
-| **[crowdsec-blocklist-import](https://github.com/wolffcatskyy/crowdsec-blocklist-import)** | Intelligence | Imports 120,000+ IPs from 36 public threat feeds into CrowdSec — preemptive blocking before attackers even connect |
+| **[crowdsec-blocklist-import](https://github.com/wolffcatskyy/crowdsec-blocklist-import)** | Intelligence | Imports IPs from public threat feeds into CrowdSec — preemptive blocking before attackers even connect |
 | **This repo** | Enforcement | Pushes CrowdSec ban decisions to your UniFi firewall via ipset/iptables |
 
 Together: the **parser** detects threats, **blocklist-import** feeds threat intel, and this **bouncer** enforces bans. A complete detect → decide → enforce feedback loop on UniFi hardware for free.
