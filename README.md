@@ -13,9 +13,50 @@ Drop-in install of the official [CrowdSec firewall bouncer](https://github.com/c
 
 **The solution:** An installer and three small scripts that handle all of this automatically. Install once, forget about it.
 
-> **v2.0**: Replaced the old Python/Docker bouncer that used the UniFi controller API. That approach hit MongoDB write storms that froze routers at 2000+ IPs. The native bouncer uses ipset and iptables directly — 100K+ IPs*, no controller API, no credentials, 15MB process RAM. See [Migration from Python Bouncer](#migration-from-python-bouncer) if upgrading from v1.x. *Safe limits per device are [currently being tested](#memory-and-ipset-limits).
+> **v2.0**: Replaced the old Python/Docker bouncer that used the UniFi controller API. That approach hit MongoDB write storms that froze routers at 2000+ IPs. The native bouncer uses ipset and iptables directly — no controller API, no credentials, 15MB process RAM. See [Migration from Python Bouncer](#migration-from-python-bouncer) if upgrading from v1.x.
 >
-> **⚠️ Memory warning:** Large decision counts can crash UniFi devices. The bouncer loads all decisions from your LAPI into a kernel ipset — each entry consumes kernel memory on top of the bouncer process. We are currently testing to determine safe limits per device. If you are importing external blocklists (e.g. via [crowdsec-blocklist-import](https://github.com/wolffcatskyy/crowdsec-blocklist-import)), start small and monitor your device's available memory. See [Memory and ipset Limits](#memory-and-ipset-limits).
+> **⚠️ ipset Size Limits:** UniFi devices have strict limits on ipset capacity. Large decision counts will crash the device or fail to load. See [Memory and ipset Limits](#memory-and-ipset-limits) before importing large blocklists.
+
+## Memory and ipset Limits
+
+**This is critical.** UniFi devices cannot handle large ipsets. Testing has established these limits:
+
+| Device | Max Safe ipset Size | Notes |
+|--------|---------------------|-------|
+| UDM SE | ~50,000 IPs | Ubiquiti documents 55K max for firewall groups |
+| UDR | ~40,000 IPs | Less RAM than UDM SE |
+| UDM | ~40,000 IPs | Testing needed — start conservative |
+| UDM Pro | ~50,000 IPs | Testing needed — start conservative |
+
+**What happens if you exceed the limit:**
+- Device becomes unresponsive
+- Bouncer fails to load decisions silently
+- ipset operations timeout
+- Potential device crash requiring reboot
+
+**Ubiquiti's official guidance** (from their forums): UniFi firewall groups support "up to 55,000 IPs" but real-world stability varies by device model and workload.
+
+**Recommendations:**
+1. Start with `maxelem` set to **40,000** in `setup.sh`
+2. Monitor device stability for 24-48 hours
+3. Increase gradually if stable (5K increments)
+4. If using [crowdsec-blocklist-import](https://github.com/wolffcatskyy/crowdsec-blocklist-import), filter your lists to stay under limits
+
+**Setting the limit in setup.sh:**
+```bash
+# Edit /data/crowdsec-bouncer/setup.sh
+DESIRED_MAXELEM=40000  # Conservative default
+```
+
+**Also set in bouncer config:**
+```yaml
+# /data/crowdsec-bouncer/crowdsec-firewall-bouncer.yaml
+ipset_size: 40000
+```
+
+Both values must match. The bouncer config `ipset_size` controls how many decisions the bouncer requests from LAPI, and `DESIRED_MAXELEM` controls the kernel ipset capacity.
+
+**If you have more decisions than your limit allows:** The bouncer will load decisions up to your limit. Excess decisions are silently dropped. Use CrowdSec Console to manage which blocklists are pushed to your LAPI, or configure the bouncer to use a dedicated LAPI with filtered decisions.
 
 ## What's Included
 
@@ -90,11 +131,12 @@ cp crowdsec-firewall-bouncer.yaml.example /data/crowdsec-bouncer/crowdsec-firewa
 nano /data/crowdsec-bouncer/crowdsec-firewall-bouncer.yaml
 ```
 
-Set these two values:
+**Critical settings:**
 
 ```yaml
 api_url: http://192.168.1.100:8081/    # Your CrowdSec LAPI address
 api_key: YOUR_BOUNCER_API_KEY           # From 'cscli bouncers add'
+ipset_size: 40000                        # MUST match DESIRED_MAXELEM in setup.sh
 ```
 
 ### Config Reference
@@ -103,6 +145,7 @@ api_key: YOUR_BOUNCER_API_KEY           # From 'cscli bouncers add'
 |---------|---------|-------------|
 | `mode` | `ipset` | Use ipset for efficient IP matching |
 | `update_frequency` | `10s` | How often to poll LAPI for new decisions |
+| `ipset_size` | `40000` | Max IPs to request from LAPI — **set this!** |
 | `disable_ipv6` | `true` | UniFi has issues with IPv6 firewall rules |
 | `deny_action` | `DROP` | `DROP` (silent) or `REJECT` (sends reset) |
 | `deny_log` | `false` | Log denied packets (can be noisy) |
@@ -138,6 +181,9 @@ systemctl status crowdsec-firewall-bouncer
 # IPs being blocked?
 ipset list crowdsec-blacklists | head -20
 
+# How many IPs loaded?
+ipset list crowdsec-blacklists | grep -c "^[0-9]"
+
 # iptables rules in place?
 iptables -L INPUT -n | grep crowdsec
 iptables -L FORWARD -n | grep crowdsec
@@ -155,7 +201,7 @@ This is the core of what this repo provides. None of this is documented by Ubiqu
 
 UniFi OS is a locked-down Debian derivative. Ubiquiti doesn't document or officially support running custom services on these devices. Through testing across firmware updates and reboots, we discovered:
 
-- **ipset and iptables are available and functional** — UniFi OS ships with full ipset/iptables support, but Ubiquiti doesn't expose this to users. You can create custom ipsets and insert rules into INPUT/FORWARD chains alongside the controller's managed rules. This is how the bouncer blocks IPs at the firewall level — no controller API, no MongoDB. Note that ipset entries consume kernel memory, so the practical limit depends on your device's available RAM (see [Memory and ipset Limits](#memory-and-ipset-limits))
+- **ipset and iptables are available and functional** — UniFi OS ships with full ipset/iptables support, but Ubiquiti doesn't expose this to users. You can create custom ipsets and insert rules into INPUT/FORWARD chains alongside the controller's managed rules. This is how the bouncer blocks IPs at the firewall level — no controller API, no MongoDB
 - **This is the only way to import custom blocklists** — UniFi has no built-in mechanism to add your own IP blocklists. Their Threat Management is a black box you can't feed custom data into. There's no blocklist import in the UI, no API for it, nothing. ipset is the only path to enforcing CrowdSec decisions, community threat intel, or any external blocklist on these devices
 - **`/data` persists across firmware updates** — but nothing else is guaranteed
 - **systemd service symlinks in `/etc/systemd/system/` get wiped** — your service vanishes after an update
@@ -181,7 +227,7 @@ Bouncer process on UDM SE / UDR:
 | CPU | <1% average |
 | Disk | ~15 MB (binary + logs) |
 
-**Important:** This table shows the bouncer process only. The ipset itself consumes additional kernel memory that scales with the number of entries. This kernel memory is not visible in the bouncer's RSS — use `cat /proc/meminfo | grep MemAvailable` to monitor actual device memory.
+**Note:** ipset entries consume kernel memory separate from the bouncer process. Monitor with `cat /proc/meminfo | grep MemAvailable`.
 
 ## Memory Safety
 
@@ -209,8 +255,6 @@ MEM_THRESHOLD=150000 /data/crowdsec-bouncer/ensure-rules.sh
 
 **After the guardrail triggers:** The bouncer is stopped but protection continues (ipset entries remain). Check the memory log to understand your device's capacity, then adjust `maxelem` in `setup.sh` to stay within safe range and restart the bouncer.
 
-The `maxelem` value in `setup.sh` provides a hard cap on ipset size (default 60,000). Set this to match your device's observed capacity from the memory log.
-
 **CrowdSec Console warning:** If your CrowdSec instance is enrolled in the [CrowdSec Console](https://app.crowdsec.net) with `console_management` enabled, the console can push large numbers of blocklist decisions via CAPI. These bypass any local controls and are loaded by the bouncer like any other decision. Check with `cscli console status` and disable with `cscli console disable console_management` if needed.
 
 ## Migration from Python Bouncer
@@ -225,7 +269,6 @@ If you were using the previous Python-based bouncer (v1.x of this repo):
 
 The native bouncer uses ipset/iptables directly instead of the UniFi controller API:
 - **No MongoDB thrashing** — the v1.x API approach wrote every IP update to the controller's MongoDB, causing router freezes at 2000+ IPs. ipset operates via netfilter with zero database overhead
-- **No hard IP cap** — ipset handles far more than the v1.x 2000 IP limit, though device memory is the practical constraint (see [Memory and ipset Limits](#memory-and-ipset-limits))
 - **No UniFi credentials needed** — no controller API, no login tokens, no CSRF
 - **No Docker overhead** — single Go binary, 15MB RAM vs 256MB+
 - **Faster response** — 10s polling vs 60s
@@ -278,6 +321,12 @@ ln -sf /data/crowdsec-bouncer/crowdsec-firewall-bouncer.service /etc/systemd/sys
 systemctl daemon-reload
 systemctl start crowdsec-firewall-bouncer
 ```
+
+**Device becomes unresponsive with large blocklist:**
+1. SSH in (if possible) and run: `systemctl stop crowdsec-firewall-bouncer`
+2. If SSH fails, reboot the device via UniFi app or physical power cycle
+3. Before restarting bouncer, reduce `ipset_size` in config and `DESIRED_MAXELEM` in setup.sh
+4. See [Memory and ipset Limits](#memory-and-ipset-limits)
 
 ## Complete UniFi + CrowdSec Suite
 
