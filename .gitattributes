@@ -1,0 +1,22 @@
+# Enforce Unix line endings (LF) for all text files
+# Prevents CRLF issues that cause bash scripts to fail with "$'\r': command not found"
+* text=auto eol=lf
+
+# Explicitly mark shell scripts
+*.sh text eol=lf
+
+# Config files
+*.yaml text eol=lf
+*.yml text eol=lf
+*.example text eol=lf
+
+# Service files
+*.service text eol=lf
+
+# Documentation
+*.md text eol=lf
+
+# Binary files (don't convert)
+*.png binary
+*.jpg binary
+*.gif binary
