@@ -96,6 +96,7 @@ Both values must match. The bouncer config `ipset_size` controls how many decisi
 
 | File | Purpose |
 |------|---------|
+| `bootstrap.sh` | One-line installer — downloads everything and runs setup |
 | `install.sh` | Downloads the official bouncer binary, installs to `/data/crowdsec-bouncer/` |
 | `setup.sh` | ExecStartPre script — loads ipset modules, creates ipset, adds iptables rules, re-links systemd service |
 | `detect-device.sh` | Auto-detects UniFi model and sets safe maxelem defaults |
@@ -126,7 +127,17 @@ cscli bouncers add my-unifi-bouncer
 
 ## Installation
 
-### Quick Install
+### One-Line Install (Recommended)
+
+SSH into your UniFi device and run:
+
+```bash
+curl -sSL https://raw.githubusercontent.com/wolffcatskyy/crowdsec-unifi-bouncer/main/bootstrap.sh | bash
+```
+
+This downloads all required files and runs the installer automatically.
+
+### Quick Install (Manual)
 
 ```bash
 # Clone this repo
