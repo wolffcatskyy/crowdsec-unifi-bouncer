@@ -1,0 +1,59 @@
+name: Lint
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+
+jobs:
+  shellcheck:
+    name: ShellCheck
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Run ShellCheck
+        uses: ludeeus/action-shellcheck@master
+        with:
+          scandir: '.'
+          severity: warning
+
+  yaml-lint:
+    name: YAML Lint
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Install yamllint
+        run: pip install yamllint
+
+      - name: Lint YAML files
+        run: |
+          # Lint CrowdSec config example
+          yamllint -d "{extends: relaxed, rules: {line-length: {max: 120}}}" crowdsec-firewall-bouncer.yaml.example
+
+          # Lint GitHub workflow and issue template YAML files
+          yamllint -d "{extends: relaxed, rules: {line-length: {max: 120}}}" .github/
+
+  line-endings:
+    name: Check Line Endings
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Check for CRLF line endings
+        run: |
+          # Find files with CRLF line endings
+          CRLF_FILES=$(find . -type f \( -name "*.sh" -o -name "*.yaml" -o -name "*.yml" -o -name "*.md" \) -exec grep -l $'\r' {} \; 2>/dev/null || true)
+
+          if [ -n "$CRLF_FILES" ]; then
+            echo "::error::The following files have CRLF line endings:"
+            echo "$CRLF_FILES"
+            exit 1
+          fi
+
+          echo "All files have Unix (LF) line endings."
