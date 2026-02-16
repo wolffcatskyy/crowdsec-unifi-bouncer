@@ -7,7 +7,8 @@ body:
     attributes:
       value: |
         ## AI-Ready Feature Request
-        Please fill out this form with as much detail as possible. The structured format helps both human contributors and AI assistants understand and implement the feature effectively.
+        Please fill out this form with as much detail as possible. The structured format
+        helps both human contributors and AI assistants understand and implement the feature.
 
   - type: textarea
     id: what
@@ -61,9 +62,9 @@ body:
       label: Acceptance Criteria
       description: Specific, testable requirements for the implementation.
       value: |
-        - [ ] 
-        - [ ] 
-        - [ ] 
+        - [ ] Criterion 1
+        - [ ] Criterion 2
+        - [ ] Criterion 3
     validations:
       required: true
 
