@@ -8,6 +8,7 @@
 IPSET_NAME="crowdsec-blacklists"
 BOUNCER_DIR="/data/crowdsec-bouncer"
 LOGFILE="$BOUNCER_DIR/log/memory.log"
+METRICS_SCRIPT="$BOUNCER_DIR/metrics.sh"
 
 # Memory threshold in kB — stop bouncer if MemAvailable drops below this.
 # 200MB default. Override with MEM_THRESHOLD env var.
@@ -31,6 +32,8 @@ if [ "$MEM_AVAIL" -lt "$MEM_THRESHOLD" ] && [ "$BOUNCER_ACTIVE" = "active" ] && 
     systemctl stop crowdsec-firewall-bouncer
     echo "$(date '+%F %T') GUARDRAIL: stopped bouncer at $IPSET_COUNT entries, mem_avail=${MEM_AVAIL}kB (threshold=${MEM_THRESHOLD}kB)" >> "$LOGFILE"
     logger -t crowdsec-bouncer "GUARDRAIL: stopped bouncer — mem_avail=${MEM_AVAIL}kB, entries=$IPSET_COUNT"
+    # Record guardrail event for Prometheus metrics
+    [ -x "$METRICS_SCRIPT" ] && "$METRICS_SCRIPT" --record-guardrail 2>/dev/null || true
     exit 0
 fi
 
@@ -50,9 +53,13 @@ fi
 if ! iptables -C INPUT -m set --match-set "$IPSET_NAME" src -j DROP 2>/dev/null; then
     iptables -I INPUT 1 -m set --match-set "$IPSET_NAME" src -j DROP
     logger -t crowdsec-bouncer "Re-added INPUT DROP rule"
+    # Record rule restoration for Prometheus metrics
+    [ -x "$METRICS_SCRIPT" ] && "$METRICS_SCRIPT" --record-rule-restored 2>/dev/null || true
 fi
 
 if ! iptables -C FORWARD -m set --match-set "$IPSET_NAME" src -j DROP 2>/dev/null; then
     iptables -I FORWARD 1 -m set --match-set "$IPSET_NAME" src -j DROP
     logger -t crowdsec-bouncer "Re-added FORWARD DROP rule"
+    # Record rule restoration for Prometheus metrics
+    [ -x "$METRICS_SCRIPT" ] && "$METRICS_SCRIPT" --record-rule-restored 2>/dev/null || true
 fi
