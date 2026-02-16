@@ -8,7 +8,7 @@ set -e
 BOUNCER_DIR="/data/crowdsec-bouncer"
 IPSET_NAME="crowdsec-blacklists"
 
-# Source device detection for safe maxelem defaults
+# Source device detection for conservative maxelem defaults
 SCRIPT_DIR="$(dirname "$0")"
 if [ -f "$SCRIPT_DIR/detect-device.sh" ]; then
     source "$SCRIPT_DIR/detect-device.sh"
@@ -16,16 +16,34 @@ elif [ -f "$BOUNCER_DIR/detect-device.sh" ]; then
     source "$BOUNCER_DIR/detect-device.sh"
 fi
 
-# Use MAXELEM from environment, or fall back to detected safe limit
+# =============================================================================
+# WARNING: ipset LIMITS ARE UNTESTED ESTIMATES
+# =============================================================================
+echo ""
+echo "=========================================================================="
+echo "WARNING: ipset LIMITS ARE UNTESTED ESTIMATES"
+echo "=========================================================================="
+echo "The default maxelem values in this bouncer are CONSERVATIVE GUESSES"
+echo "based on device RAM specs, NOT verified through stability testing."
+echo ""
+echo "Monitor your device's memory while running:"
+echo "  cat /proc/meminfo | grep MemAvailable"
+echo ""
+echo "If you find a stable limit for your device, please report it:"
+echo "  https://github.com/wolffcatskyy/crowdsec-unifi-bouncer/issues"
+echo "=========================================================================="
+echo ""
+
+# Use MAXELEM from environment, or fall back to detected conservative limit
 if [ -z "$MAXELEM" ]; then
-    MAXELEM="${SAFE_MAXELEM:-30000}"
+    MAXELEM="${SAFE_MAXELEM:-20000}"
     echo "Auto-detected device: ${DETECTED_MODEL:-Unknown}"
-    echo "Using safe maxelem: $MAXELEM"
+    echo "Using conservative default maxelem: $MAXELEM (UNTESTED - monitor memory!)"
 else
-    # Validate user-configured MAXELEM against safe limit
+    # Note if user-configured MAXELEM differs from suggested
     if [ -n "$SAFE_MAXELEM" ] && [ "$MAXELEM" -gt "$SAFE_MAXELEM" ]; then
-        echo "WARNING: Configured MAXELEM ($MAXELEM) exceeds safe limit ($SAFE_MAXELEM) for ${DETECTED_MODEL:-this device}"
-        echo "This may cause memory issues. Consider reducing to $SAFE_MAXELEM or lower."
+        echo "NOTE: Configured MAXELEM ($MAXELEM) exceeds conservative default ($SAFE_MAXELEM)"
+        echo "This may be fine - monitor memory: cat /proc/meminfo | grep MemAvailable"
     fi
     echo "Using configured maxelem: $MAXELEM"
 fi
@@ -61,3 +79,6 @@ if [ ! -L /etc/systemd/system/crowdsec-firewall-bouncer.service ]; then
 fi
 
 echo 'CrowdSec bouncer setup complete'
+echo ""
+echo "REMINDER: Monitor memory with: cat /proc/meminfo | grep MemAvailable"
+echo "If MemAvailable drops below 300MB, reduce maxelem and restart."
