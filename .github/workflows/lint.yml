@@ -48,7 +48,8 @@ jobs:
       - name: Check for CRLF line endings
         run: |
           # Find files with CRLF line endings
-          CRLF_FILES=$(find . -type f \( -name "*.sh" -o -name "*.yaml" -o -name "*.yml" -o -name "*.md" \) -exec grep -l $'\r' {} \; 2>/dev/null || true)
+          CRLF_FILES=$(find . -type f \( -name "*.sh" -o -name "*.yaml" -o -name "*.yml" \
+            -o -name "*.md" \) -exec grep -l $'\r' {} \; 2>/dev/null || true)
 
           if [ -n "$CRLF_FILES" ]; then
             echo "::error::The following files have CRLF line endings:"
