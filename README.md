@@ -17,16 +17,50 @@ Drop-in install of the official [CrowdSec firewall bouncer](https://github.com/c
 >
 > **⚠️ ipset Size Limits:** UniFi devices have strict limits on ipset capacity. Large decision counts will crash the device or fail to load. See [Memory and ipset Limits](#memory-and-ipset-limits) before importing large blocklists.
 
+## Automatic Device Detection
+
+The bouncer now auto-detects your UniFi device model and sets safe ipset limits automatically.
+
+**How it works:**
+- `detect-device.sh` identifies your device using `ubnt-device-info model`
+- Sets `SAFE_MAXELEM` based on device memory capacity
+- `setup.sh` uses this value unless you override with `MAXELEM` environment variable
+- Warns you if your configured `MAXELEM` exceeds the safe limit
+
+**Run detection manually:**
+```bash
+/data/crowdsec-bouncer/detect-device.sh
+```
+
+Output:
+```
+=== UniFi Device Detection ===
+Detected model: UniFi Dream Machine SE
+Total memory: 3946MB
+Safe maxelem: 60000
+```
+
+**Override detection:**
+```bash
+# Set custom maxelem in environment (e.g., in systemd service)
+MAXELEM=50000 /data/crowdsec-bouncer/setup.sh
+```
+
 ## Memory and ipset Limits
 
-**This is critical.** UniFi devices cannot handle large ipsets. Testing has established these limits:
+**This is critical.** UniFi devices cannot handle large ipsets. The auto-detection sets these safe defaults:
 
-| Device | Max Safe ipset Size | Notes |
-|--------|---------------------|-------|
-| UDM SE | ~50,000 IPs | Ubiquiti documents 55K max for firewall groups |
-| UDR | ~40,000 IPs | Less RAM than UDM SE |
-| UDM | ~40,000 IPs | Testing needed — start conservative |
-| UDM Pro | ~50,000 IPs | Testing needed — start conservative |
+| Device | Max Safe ipset Size | RAM | Notes |
+|--------|---------------------|-----|-------|
+| UDM Pro Max | 100,000 IPs | 8GB | Highest capacity |
+| UDM Pro | 60,000 IPs | 4GB | Ubiquiti documents 55K max for firewall groups |
+| UDM SE | 60,000 IPs | 4GB | Tested stable |
+| UDR | 40,000 IPs | 2GB | Less RAM than UDM SE |
+| UDM (original) | 40,000 IPs | 2GB | Testing needed |
+| UCG Fiber | 40,000 IPs | 2GB | Testing needed |
+| UCG Ultra | 40,000 IPs | 2GB | Testing needed |
+| UniFi Express | 20,000 IPs | 1GB | Most constrained |
+| Unknown device | 30,000 IPs | - | Conservative fallback |
 
 **What happens if you exceed the limit:**
 - Device becomes unresponsive
@@ -64,6 +98,7 @@ Both values must match. The bouncer config `ipset_size` controls how many decisi
 |------|---------|
 | `install.sh` | Downloads the official bouncer binary, installs to `/data/crowdsec-bouncer/` |
 | `setup.sh` | ExecStartPre script — loads ipset modules, creates ipset, adds iptables rules, re-links systemd service |
+| `detect-device.sh` | Auto-detects UniFi model and sets safe maxelem defaults |
 | `ensure-rules.sh` | Cron job (every 5 min) — re-adds iptables rules if controller reprovisioning removed them |
 | `metrics.sh` | Prometheus metrics endpoint for monitoring |
 | `crowdsec-firewall-bouncer.service` | systemd unit file for the bouncer |

@@ -63,12 +63,12 @@ if [ ! -f "$BOUNCER_DIR/crowdsec-firewall-bouncer.yaml" ]; then
 fi
 
 # Install scripts and service files
-for script in setup.sh ensure-rules.sh metrics.sh crowdsec-firewall-bouncer.service crowdsec-unifi-metrics.service; do
+for script in setup.sh detect-device.sh ensure-rules.sh metrics.sh crowdsec-firewall-bouncer.service crowdsec-unifi-metrics.service; do
     if [ -f "/tmp/$script" ] || [ -f "$(dirname "$0")/$script" ]; then
         cp "$(dirname "$0")/$script" "$BOUNCER_DIR/" 2>/dev/null || true
     fi
 done
-chmod +x "$BOUNCER_DIR/setup.sh" "$BOUNCER_DIR/ensure-rules.sh" "$BOUNCER_DIR/metrics.sh" 2>/dev/null || true
+chmod +x "$BOUNCER_DIR/setup.sh" "$BOUNCER_DIR/detect-device.sh" "$BOUNCER_DIR/ensure-rules.sh" "$BOUNCER_DIR/metrics.sh" 2>/dev/null || true
 
 # Install systemd service
 cp "$BOUNCER_DIR/crowdsec-firewall-bouncer.service" /etc/systemd/system/ 2>/dev/null || \
