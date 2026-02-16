@@ -77,7 +77,8 @@ get_safe_maxelem() {
 }
 
 get_total_memory_mb() {
-    local mem_kb=$(grep MemTotal /proc/meminfo 2>/dev/null | awk '{print $2}')
+    local mem_kb
+    mem_kb=$(grep MemTotal /proc/meminfo 2>/dev/null | awk '{print $2}')
     if [ -n "$mem_kb" ]; then
         echo $((mem_kb / 1024))
     else
