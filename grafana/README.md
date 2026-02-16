@@ -1,27 +1,26 @@
 # CrowdSec UniFi Bouncer - Grafana Dashboard
 
-Pre-built Grafana dashboard for monitoring the CrowdSec Firewall Bouncer on UniFi OS devices.
+Pre-built Grafana dashboard for monitoring the CrowdSec Firewall Bouncer on UniFi OS devices (UDM, UDM SE, UDR).
 
 ## Prerequisites
 
-1. **CrowdSec Firewall Bouncer** v0.0.30+ with Prometheus metrics enabled
-2. **Prometheus** scraping the bouncer metrics endpoint
-3. **Grafana** 10.0.0+ (compatible with older versions, some features may vary)
+1. **CrowdSec Firewall Bouncer** installed on your UniFi device
+2. **UniFi Metrics Service** (`crowdsec-unifi-metrics.service`) running
+3. **Prometheus** scraping the metrics endpoint
+4. **Grafana** 10.0.0+ (compatible with older versions)
 
-## Enable Prometheus Metrics on the Bouncer
+## Enable Metrics
 
-Edit `/data/crowdsec-bouncer/crowdsec-firewall-bouncer.yaml` on your UniFi device:
+Install and start the metrics service on your UniFi device:
 
-```yaml
-prometheus:
-  enabled: true
-  listen_addr: 0.0.0.0
-  listen_port: 60601
-```
-
-Restart the bouncer:
 ```bash
-systemctl restart crowdsec-firewall-bouncer
+# Link and start the metrics service
+ln -sf /data/crowdsec-bouncer/crowdsec-unifi-metrics.service /etc/systemd/system/
+systemctl daemon-reload
+systemctl enable --now crowdsec-unifi-metrics
+
+# Verify metrics are available
+curl http://localhost:9101/metrics
 ```
 
 ## Configure Prometheus Scrape
@@ -30,14 +29,12 @@ Add to your Prometheus configuration:
 
 ```yaml
 scrape_configs:
-  - job_name: 'crowdsec-firewall-bouncer'
+  - job_name: 'crowdsec-unifi-bouncer'
     static_configs:
       - targets:
-        - 'udm-ip:60601'    # UDM/UDM SE
-        - 'udr-ip:60601'    # UDR
-    relabel_configs:
-      - source_labels: [__address__]
-        target_label: instance
+        - 'udm-ip:9101'    # UDM/UDM SE
+        - 'udr-ip:9101'    # UDR
+    scrape_interval: 60s
 ```
 
 ## Import the Dashboard
@@ -57,84 +54,123 @@ scrape_configs:
 
 ## Dashboard Panels
 
-### Status Row
+### Status Row (Top)
 | Panel | Description |
 |-------|-------------|
-| **Blocked IPs (Total)** | Gauge showing total blocked IPs across all origins |
-| **Sync Status** | Time since last metric update (green <2m, yellow 2-5m, red >5m) |
-| **Packet Drop Rate** | Percentage of packets being blocked |
-| **Bouncer Status** | UP/DOWN indicator |
+| **Bouncer Status** | UP/DOWN indicator based on `crowdsec_unifi_bouncer_up` |
+| **Blocked IPs** | Current count of IPs in ipset (stat with mini graph) |
+| **ipset Capacity** | Gauge showing ipset fill ratio (green <70%, yellow 70-85%, red >85%) |
+| **Available Memory** | System memory available in MB (red <300MB, yellow 300-500MB, green >500MB) |
+| **iptables Rules** | OK/MISSING indicator for INPUT and FORWARD DROP rules |
+| **Guardrail Triggers** | Count of memory guardrail activations |
 
-### Blocked IPs by Origin Row
+### Time Series Row (Middle)
 | Panel | Description |
 |-------|-------------|
-| **Blocked IPs by Origin** | Breakdown by source (CAPI, local decisions, blocklists) |
-| **Traffic Stats** | Current dropped packets, bytes, and total processed |
+| **ipset Usage Over Time** | Blocked IPs vs max capacity with threshold lines |
+| **Memory Over Time** | Available memory with threshold lines |
 
-### Historical Data Row
+### Event Row (Bottom)
 | Panel | Description |
 |-------|-------------|
-| **Blocked IPs Over Time** | Time series of blocked IPs by origin (log scale) |
-| **Packet Rate** | Dropped vs processed packets per second |
-| **Error/Drop Rate Over Time** | Percentage of traffic being blocked |
-| **Blocked Bandwidth Over Time** | Data volume blocked (bytes/sec) |
+| **Event Counters** | Rules restored, guardrail triggers, and errors over time |
+| **ipset Fill Ratio Over Time** | Percentage fill over time |
 
 ## Available Metrics
 
-The CrowdSec Firewall Bouncer exposes these Prometheus metrics:
+The UniFi metrics endpoint exposes these Prometheus metrics:
 
 | Metric | Type | Description |
 |--------|------|-------------|
-| `fw_bouncer_banned_ips` | Gauge | Number of banned IPs by origin |
-| `fw_bouncer_dropped_packets` | Counter | Total packets dropped |
-| `fw_bouncer_dropped_bytes` | Counter | Total bytes dropped |
-| `fw_bouncer_processed_packets` | Counter | Total packets processed |
+| `crowdsec_unifi_bouncer_up` | Gauge | Whether bouncer service is running (1=up) |
+| `crowdsec_unifi_bouncer_blocked_ips_total` | Gauge | Current IPs in ipset |
+| `crowdsec_unifi_bouncer_ipset_size` | Gauge | Configured maxelem capacity |
+| `crowdsec_unifi_bouncer_ipset_fill_ratio` | Gauge | Current/max capacity (0.0-1.0) |
+| `crowdsec_unifi_bouncer_memory_available_kb` | Gauge | Available system memory |
+| `crowdsec_unifi_bouncer_memory_total_kb` | Gauge | Total system memory |
+| `crowdsec_unifi_bouncer_last_sync_timestamp` | Gauge | Last ensure-rules.sh run (Unix timestamp) |
+| `crowdsec_unifi_bouncer_input_rule_present` | Gauge | INPUT DROP rule exists (1=yes) |
+| `crowdsec_unifi_bouncer_forward_rule_present` | Gauge | FORWARD DROP rule exists (1=yes) |
+| `crowdsec_unifi_bouncer_errors_total` | Counter | Total errors encountered |
+| `crowdsec_unifi_bouncer_guardrail_triggered_total` | Counter | Memory guardrail activations |
+| `crowdsec_unifi_bouncer_rules_restored_total` | Counter | Times iptables rules were re-added |
 
 ## Variables
 
 The dashboard supports these template variables:
 
-- **datasource**: Select the Prometheus datasource
-- **instance**: Filter by bouncer instance (supports multi-select)
+- **instance**: Filter by bouncer instance (supports multi-select, defaults to all)
 
 ## Alerting
 
-Recommended alerts to configure:
+Recommended alerts to configure in Prometheus/Alertmanager:
 
 ```yaml
-# Bouncer down
-- alert: CrowdSecBouncerDown
-  expr: up{job="crowdsec-firewall-bouncer"} == 0
-  for: 5m
-  labels:
-    severity: critical
+groups:
+  - name: crowdsec-unifi-bouncer
+    rules:
+      # Bouncer down
+      - alert: CrowdSecBouncerDown
+        expr: crowdsec_unifi_bouncer_up == 0
+        for: 5m
+        labels:
+          severity: critical
+        annotations:
+          summary: "CrowdSec bouncer is down on {{ $labels.instance }}"
 
-# High drop rate
-- alert: CrowdSecHighDropRate
-  expr: (sum(rate(fw_bouncer_dropped_packets[5m])) / sum(rate(fw_bouncer_processed_packets[5m]))) > 0.3
-  for: 10m
-  labels:
-    severity: warning
+      # ipset >80% full
+      - alert: CrowdSecIpsetNearCapacity
+        expr: crowdsec_unifi_bouncer_ipset_fill_ratio > 0.8
+        for: 10m
+        labels:
+          severity: warning
+        annotations:
+          summary: "CrowdSec ipset at {{ $value | humanizePercentage }} capacity"
 
-# Stale metrics
-- alert: CrowdSecBouncerStale
-  expr: time() - max(timestamp(fw_bouncer_banned_ips)) > 300
-  for: 5m
-  labels:
-    severity: warning
+      # Memory <300MB
+      - alert: CrowdSecLowMemory
+        expr: crowdsec_unifi_bouncer_memory_available_kb < 300000
+        for: 5m
+        labels:
+          severity: warning
+        annotations:
+          summary: "Low memory on {{ $labels.instance }}: {{ $value | humanize1024 }}B available"
+
+      # iptables rules missing
+      - alert: CrowdSecRulesMissing
+        expr: crowdsec_unifi_bouncer_input_rule_present == 0 or crowdsec_unifi_bouncer_forward_rule_present == 0
+        for: 2m
+        labels:
+          severity: critical
+        annotations:
+          summary: "CrowdSec iptables rules missing on {{ $labels.instance }}"
+
+      # Guardrail triggered
+      - alert: CrowdSecGuardrailTriggered
+        expr: increase(crowdsec_unifi_bouncer_guardrail_triggered_total[1h]) > 0
+        labels:
+          severity: warning
+        annotations:
+          summary: "CrowdSec memory guardrail triggered on {{ $labels.instance }}"
 ```
 
 ## Troubleshooting
 
 ### No data showing
-1. Verify metrics are enabled in bouncer config
-2. Check bouncer is running: `systemctl status crowdsec-firewall-bouncer`
-3. Test metrics endpoint: `curl http://localhost:60601/metrics`
-4. Verify Prometheus is scraping: check Prometheus targets page
+1. Verify metrics service is running: `systemctl status crowdsec-unifi-metrics`
+2. Test metrics endpoint: `curl http://localhost:9101/metrics`
+3. Check Prometheus targets page for scrape errors
+4. Verify firewall allows access to port 9101
 
-### Metrics endpoint not accessible
-- Ensure `listen_addr` is set to `0.0.0.0` (not `127.0.0.1`) if accessing remotely
-- Check firewall rules allow access to port 60601
+### Metrics endpoint not accessible remotely
+- Default binds to `0.0.0.0:9101`
+- Check UniFi firewall rules for the metrics port
+- Verify no conflicting services on port 9101
+
+### "No data" for specific panels
+- Check if the bouncer is running: `systemctl status crowdsec-firewall-bouncer`
+- Verify ipset exists: `ipset list crowdsec-blacklists | head`
+- Check iptables rules: `iptables -L INPUT -n | grep crowdsec`
 
 ## License
 
