@@ -65,7 +65,9 @@ Both values must match. The bouncer config `ipset_size` controls how many decisi
 | `install.sh` | Downloads the official bouncer binary, installs to `/data/crowdsec-bouncer/` |
 | `setup.sh` | ExecStartPre script — loads ipset modules, creates ipset, adds iptables rules, re-links systemd service |
 | `ensure-rules.sh` | Cron job (every 5 min) — re-adds iptables rules if controller reprovisioning removed them |
-| `crowdsec-firewall-bouncer.service` | systemd unit file |
+| `metrics.sh` | Prometheus metrics endpoint for monitoring |
+| `crowdsec-firewall-bouncer.service` | systemd unit file for the bouncer |
+| `crowdsec-unifi-metrics.service` | systemd unit file for the metrics endpoint |
 | `crowdsec-firewall-bouncer.yaml.example` | Config template |
 
 ## Tested On
@@ -256,6 +258,105 @@ MEM_THRESHOLD=150000 /data/crowdsec-bouncer/ensure-rules.sh
 **After the guardrail triggers:** The bouncer is stopped but protection continues (ipset entries remain). Check the memory log to understand your device's capacity, then adjust `maxelem` in `setup.sh` to stay within safe range and restart the bouncer.
 
 **CrowdSec Console warning:** If your CrowdSec instance is enrolled in the [CrowdSec Console](https://app.crowdsec.net) with `console_management` enabled, the console can push large numbers of blocklist decisions via CAPI. These bypass any local controls and are loaded by the bouncer like any other decision. Check with `cscli console status` and disable with `cscli console disable console_management` if needed.
+
+## Prometheus Metrics
+
+A lightweight Prometheus metrics endpoint exposes UniFi-specific operational metrics. This complements the official bouncer's built-in Prometheus support (which tracks decision-related metrics) with metrics about the persistence layer.
+
+### Enable Metrics
+
+```bash
+# Link and start the metrics service
+ln -sf /data/crowdsec-bouncer/crowdsec-unifi-metrics.service /etc/systemd/system/
+systemctl daemon-reload
+systemctl enable --now crowdsec-unifi-metrics
+
+# Verify
+curl http://localhost:9101/metrics
+```
+
+### Available Metrics
+
+| Metric | Type | Description |
+|--------|------|-------------|
+| `crowdsec_unifi_bouncer_up` | Gauge | Whether bouncer service is running (1=up) |
+| `crowdsec_unifi_bouncer_blocked_ips_total` | Gauge | Current IPs in ipset |
+| `crowdsec_unifi_bouncer_ipset_size` | Gauge | Configured maxelem capacity |
+| `crowdsec_unifi_bouncer_ipset_fill_ratio` | Gauge | Current/max capacity (0.0-1.0) |
+| `crowdsec_unifi_bouncer_memory_available_kb` | Gauge | Available system memory |
+| `crowdsec_unifi_bouncer_memory_total_kb` | Gauge | Total system memory |
+| `crowdsec_unifi_bouncer_last_sync_timestamp` | Gauge | Last ensure-rules.sh run (Unix timestamp) |
+| `crowdsec_unifi_bouncer_input_rule_present` | Gauge | INPUT DROP rule exists (1=yes) |
+| `crowdsec_unifi_bouncer_forward_rule_present` | Gauge | FORWARD DROP rule exists (1=yes) |
+| `crowdsec_unifi_bouncer_errors_total` | Counter | Total errors encountered |
+| `crowdsec_unifi_bouncer_guardrail_triggered_total` | Counter | Memory guardrail activations |
+| `crowdsec_unifi_bouncer_rules_restored_total` | Counter | Times iptables rules were re-added |
+
+### Prometheus Configuration
+
+```yaml
+scrape_configs:
+  - job_name: 'crowdsec-unifi-bouncer'
+    static_configs:
+      - targets: ['192.168.1.1:9101']  # Your UniFi device IP
+    scrape_interval: 60s
+```
+
+### Grafana Dashboard
+
+A ready-to-import Grafana dashboard is included at `grafana/crowdsec-unifi-bouncer-dashboard.json`. Import it via Grafana UI (Dashboards > Import) and select your Prometheus data source.
+
+**Dashboard panels:**
+- Bouncer status (up/down)
+- Blocked IPs count
+- ipset capacity gauge (with warning thresholds)
+- Available memory
+- iptables rules status
+- Guardrail trigger count
+- Historical graphs for IPs, memory, and events
+
+**Example PromQL queries** for custom dashboards:
+
+```promql
+# ipset fill percentage
+crowdsec_unifi_bouncer_ipset_fill_ratio * 100
+
+# Memory pressure (MB available)
+crowdsec_unifi_bouncer_memory_available_kb / 1024
+
+# Alert: ipset >80% full
+crowdsec_unifi_bouncer_ipset_fill_ratio > 0.8
+
+# Alert: memory <300MB
+crowdsec_unifi_bouncer_memory_available_kb < 300000
+
+# Rule restoration rate (indicates controller reprovisioning)
+rate(crowdsec_unifi_bouncer_rules_restored_total[1h])
+```
+
+### Configuration
+
+Environment variables (set in systemd service or shell):
+
+| Variable | Default | Description |
+|----------|---------|-------------|
+| `METRICS_PORT` | `9101` | HTTP server port |
+| `BOUNCER_DIR` | `/data/crowdsec-bouncer` | Installation directory |
+| `IPSET_NAME` | `crowdsec-blacklists` | ipset name |
+
+### Port Selection
+
+Default port is 9101. Common alternatives:
+- 9100 is often used by node_exporter
+- 60601 is used by the official bouncer's built-in Prometheus (if enabled)
+
+To change the port, edit `/data/crowdsec-bouncer/crowdsec-unifi-metrics.service`:
+
+```ini
+Environment=METRICS_PORT=9102
+```
+
+Then reload: `systemctl daemon-reload && systemctl restart crowdsec-unifi-metrics`
 
 ## Migration from Python Bouncer
 

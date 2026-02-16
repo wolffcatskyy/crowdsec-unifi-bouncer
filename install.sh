@@ -62,13 +62,13 @@ if [ ! -f "$BOUNCER_DIR/crowdsec-firewall-bouncer.yaml" ]; then
     }
 fi
 
-# Install scripts and service file
-for script in setup.sh ensure-rules.sh crowdsec-firewall-bouncer.service; do
+# Install scripts and service files
+for script in setup.sh ensure-rules.sh metrics.sh crowdsec-firewall-bouncer.service crowdsec-unifi-metrics.service; do
     if [ -f "/tmp/$script" ] || [ -f "$(dirname "$0")/$script" ]; then
         cp "$(dirname "$0")/$script" "$BOUNCER_DIR/" 2>/dev/null || true
     fi
 done
-chmod +x "$BOUNCER_DIR/setup.sh" "$BOUNCER_DIR/ensure-rules.sh" 2>/dev/null || true
+chmod +x "$BOUNCER_DIR/setup.sh" "$BOUNCER_DIR/ensure-rules.sh" "$BOUNCER_DIR/metrics.sh" 2>/dev/null || true
 
 # Install systemd service
 cp "$BOUNCER_DIR/crowdsec-firewall-bouncer.service" /etc/systemd/system/ 2>/dev/null || \
@@ -92,3 +92,8 @@ echo "  3. Start bouncer:  systemctl start crowdsec-firewall-bouncer"
 echo "  4. Enable on boot: systemctl enable crowdsec-firewall-bouncer"
 echo "  5. Check status:   systemctl status crowdsec-firewall-bouncer"
 echo "  6. Check logs:     tail -f $BOUNCER_DIR/log/crowdsec-firewall-bouncer.log"
+echo ""
+echo "Optional: Enable Prometheus metrics endpoint"
+echo "  ln -sf $BOUNCER_DIR/crowdsec-unifi-metrics.service /etc/systemd/system/"
+echo "  systemctl daemon-reload && systemctl enable --now crowdsec-unifi-metrics"
+echo "  curl http://localhost:9101/metrics"
