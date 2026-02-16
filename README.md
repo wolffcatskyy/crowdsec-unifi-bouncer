@@ -48,19 +48,19 @@ MAXELEM=50000 /data/crowdsec-bouncer/setup.sh
 
 ## Memory and ipset Limits
 
-**This is critical.** UniFi devices cannot handle large ipsets. The auto-detection sets these safe defaults:
+**This is critical.** UniFi devices cannot handle large ipsets. Memory is not the only bottleneck — ipset operations themselves can cause kernel instability at high counts. The auto-detection sets these conservative defaults:
 
 | Device | Max Safe ipset Size | RAM | Notes |
 |--------|---------------------|-----|-------|
-| UDM Pro Max | 100,000 IPs | 8GB | Highest capacity |
-| UDM Pro | 60,000 IPs | 4GB | Ubiquiti documents 55K max for firewall groups |
-| UDM SE | 60,000 IPs | 4GB | Tested stable |
-| UDR | 40,000 IPs | 2GB | Less RAM than UDM SE |
-| UDM (original) | 40,000 IPs | 2GB | Testing needed |
-| UCG Fiber | 40,000 IPs | 2GB | Testing needed |
-| UCG Ultra | 40,000 IPs | 2GB | Testing needed |
-| UniFi Express | 20,000 IPs | 1GB | Most constrained |
-| Unknown device | 30,000 IPs | - | Conservative fallback |
+| UDM Pro Max | 60,000 IPs | 8GB | Memory isn't the only bottleneck |
+| UDM Pro | 50,000 IPs | 4GB | Reduced from 60K for safety margin |
+| UDM SE | 50,000 IPs | 4GB | Reduced from 60K for safety margin |
+| UDR | 35,000 IPs | 2GB | Reduced from 40K |
+| UDM (original) | 35,000 IPs | 2GB | Reduced from 40K |
+| UCG Fiber | 35,000 IPs | 2GB | Reduced from 40K |
+| UCG Ultra | 35,000 IPs | 2GB | Reduced from 40K |
+| UniFi Express | 15,000 IPs | 1GB | Most constrained, reduced from 20K |
+| Unknown device | 25,000 IPs | - | Conservative fallback |
 
 **What happens if you exceed the limit:**
 - Device becomes unresponsive

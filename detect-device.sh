@@ -5,21 +5,22 @@
 # Usage: source detect-device.sh   # Sets DETECTED_MODEL and SAFE_MAXELEM
 #    or: ./detect-device.sh        # Prints detection info
 
-# Safe maxelem defaults based on device memory
-# These are conservative values to avoid OOM conditions
-# ipset uses ~100 bytes per entry, so 60000 entries ≈ 6MB
+# Safe maxelem defaults based on device memory and stability testing
+# These are conservative values to avoid OOM conditions and kernel instability
+# Memory isn't the only bottleneck - ipset operations can cause issues at high counts
+# ipset uses ~100 bytes per entry, so 50000 entries ≈ 5MB
 declare -A DEVICE_MAXELEM=(
-    ["UniFi Dream Machine Pro"]=60000      # UDM-Pro: 4GB RAM
-    ["UniFi Dream Machine SE"]=60000       # UDM-SE: 4GB RAM
-    ["UniFi Dream Machine Pro Max"]=100000 # UDM-Pro-Max: 8GB RAM
-    ["UniFi Dream Router"]=40000           # UDR: 2GB RAM
-    ["UniFi Cloud Gateway Fiber"]=40000    # UCG-Fiber: 2GB RAM
-    ["UniFi Cloud Gateway Ultra"]=40000    # UCG-Ultra: 2GB RAM
-    ["UniFi Express"]=20000                # UX: 1GB RAM
-    ["UniFi Dream Machine"]=40000          # UDM (original): 2GB RAM
+    ["UniFi Dream Machine Pro"]=50000      # UDM-Pro: 4GB RAM, reduced from 60K for safety
+    ["UniFi Dream Machine SE"]=50000       # UDM-SE: 4GB RAM, reduced from 60K for safety
+    ["UniFi Dream Machine Pro Max"]=60000  # UDM-Pro-Max: 8GB RAM, memory isn't the only bottleneck
+    ["UniFi Dream Router"]=35000           # UDR: 2GB RAM, reduced from 40K
+    ["UniFi Cloud Gateway Fiber"]=35000    # UCG-Fiber: 2GB RAM, reduced from 40K
+    ["UniFi Cloud Gateway Ultra"]=35000    # UCG-Ultra: 2GB RAM, reduced from 40K
+    ["UniFi Express"]=15000                # UX: 1GB RAM, reduced from 20K
+    ["UniFi Dream Machine"]=35000          # UDM (original): 2GB RAM, reduced from 40K
 )
 
-DEFAULT_MAXELEM=30000
+DEFAULT_MAXELEM=25000
 
 detect_device_model() {
     local model=""
