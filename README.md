@@ -14,18 +14,61 @@ Drop-in install of the official [CrowdSec firewall bouncer](https://github.com/c
 **The solution:** An installer and three small scripts that handle all of this automatically. Install once, forget about it.
 
 > **v2.0**: Replaced the old Python/Docker bouncer that used the UniFi controller API. That approach hit MongoDB write storms that froze routers at 2000+ IPs. The native bouncer uses ipset and iptables directly — no controller API, no credentials, 15MB process RAM. See [Migration from Python Bouncer](#migration-from-python-bouncer) if upgrading from v1.x.
->
-> **⚠️ ipset Size Limits:** UniFi devices have strict limits on ipset capacity. Large decision counts will crash the device or fail to load. See [Memory and ipset Limits](#memory-and-ipset-limits) before importing large blocklists.
+
+## WARNING: ipset Limits Are UNTESTED ESTIMATES
+
+**This is critical.** The ipset maxelem values in this bouncer are **CONSERVATIVE GUESSES**, not empirically verified limits. We have NOT systematically tested stability on each UniFi device model.
+
+### What we know:
+- UniFi devices have limited RAM and ipset capacity
+- Large ipsets can crash devices or cause kernel instability
+- Memory is not the only bottleneck — ipset operations themselves can cause issues
+
+### What we DON'T know:
+- Actual safe limits for each device model under real-world conditions
+- How different UniFi applications (Protect, Talk, Access) affect available headroom
+- Whether limits vary by firmware version
+
+### Default: 20,000 IPs for ALL devices
+
+We've intentionally set a very conservative default (20,000 entries) for all device models. This is almost certainly lower than what your device can handle, but we'd rather you start safe than crash your router.
+
+### How to find YOUR device's actual limit:
+
+1. **Start with the default** (20,000 entries)
+2. **Monitor memory continuously:**
+   ```bash
+   cat /proc/meminfo | grep MemAvailable
+   ```
+3. **Run for 24-48 hours** under typical network load
+4. **If stable with >500MB available**, increase by 5,000 entries
+5. **Repeat** until you find instability, then back off 10,000
+6. **Report your findings!** Open an issue with your device model, firmware version, running applications, and tested stable limit
+
+### Help us build real data
+
+If you successfully run this bouncer, please report your experience via [GitHub Issues](https://github.com/wolffcatskyy/crowdsec-unifi-bouncer/issues):
+
+```
+Device: [model]
+Firmware: [version]
+UniFi Apps Running: [Protect/Talk/Access/etc]
+Stable maxelem: [number]
+MemAvailable at that level: [KB]
+Duration tested: [hours/days]
+```
+
+With community reports, we can build a real database of tested limits.
 
 ## Automatic Device Detection
 
-The bouncer now auto-detects your UniFi device model and sets safe ipset limits automatically.
+The bouncer auto-detects your UniFi device model and sets conservative defaults.
 
 **How it works:**
 - `detect-device.sh` identifies your device using `ubnt-device-info model`
-- Sets `SAFE_MAXELEM` based on device memory capacity
+- Sets `SAFE_MAXELEM` to a conservative 20,000 (same for all devices)
 - `setup.sh` uses this value unless you override with `MAXELEM` environment variable
-- Warns you if your configured `MAXELEM` exceeds the safe limit
+- Prints warnings reminding you these are untested estimates
 
 **Run detection manually:**
 ```bash
@@ -37,58 +80,86 @@ Output:
 === UniFi Device Detection ===
 Detected model: UniFi Dream Machine SE
 Total memory: 3946MB
-Safe maxelem: 60000
+Suggested maxelem: 20000 (CONSERVATIVE DEFAULT)
+
+==========================================================================
+WARNING: ipset LIMITS ARE UNTESTED ESTIMATES
+==========================================================================
+The suggested maxelem value (20000) is a CONSERVATIVE GUESS, not a
+verified safe limit for your device. Real stability depends on:
+  - Running UniFi applications (Protect, Talk, Access use RAM)
+  - Current system load and memory pressure
+  - Firmware version
+
+RECOMMENDED:
+  1. Start with this conservative default (20,000)
+  2. Monitor memory: cat /proc/meminfo | grep MemAvailable
+  3. Run for 24-48 hours under typical load
+  4. If stable with >500MB free, increase by 5,000 and repeat
+  5. Report your tested limits via GitHub issues!
+==========================================================================
 ```
 
 **Override detection:**
 ```bash
 # Set custom maxelem in environment (e.g., in systemd service)
-MAXELEM=50000 /data/crowdsec-bouncer/setup.sh
+MAXELEM=30000 /data/crowdsec-bouncer/setup.sh
 ```
 
 ## Memory and ipset Limits
 
-**This is critical.** UniFi devices cannot handle large ipsets. Memory is not the only bottleneck — ipset operations themselves can cause kernel instability at high counts. The auto-detection sets these conservative defaults:
+### Conservative Defaults (UNTESTED)
 
-| Device | Max Safe ipset Size | RAM | Notes |
-|--------|---------------------|-----|-------|
-| UDM Pro Max | 60,000 IPs | 8GB | Memory isn't the only bottleneck |
-| UDM Pro | 50,000 IPs | 4GB | Reduced from 60K for safety margin |
-| UDM SE | 50,000 IPs | 4GB | Reduced from 60K for safety margin |
-| UDR | 35,000 IPs | 2GB | Reduced from 40K |
-| UDM (original) | 35,000 IPs | 2GB | Reduced from 40K |
-| UCG Fiber | 35,000 IPs | 2GB | Reduced from 40K |
-| UCG Ultra | 35,000 IPs | 2GB | Reduced from 40K |
-| UniFi Express | 15,000 IPs | 1GB | Most constrained, reduced from 20K |
-| Unknown device | 25,000 IPs | - | Conservative fallback |
+| Device | Default maxelem | RAM | Status |
+|--------|-----------------|-----|--------|
+| UDM Pro Max | 20,000 IPs | 8GB | UNTESTED - likely can go higher |
+| UDM Pro | 20,000 IPs | 4GB | UNTESTED - likely can go higher |
+| UDM SE | 20,000 IPs | 4GB | UNTESTED - likely can go higher |
+| UDR | 20,000 IPs | 2GB | UNTESTED |
+| UDM (original) | 20,000 IPs | 2GB | UNTESTED |
+| UCG Fiber | 20,000 IPs | 2GB | UNTESTED |
+| UCG Ultra | 20,000 IPs | 2GB | UNTESTED |
+| UniFi Express | 20,000 IPs | 1GB | UNTESTED - may need to go lower |
+| Unknown device | 20,000 IPs | - | Conservative fallback |
 
-**What happens if you exceed the limit:**
+### What happens if you exceed the limit:
 - Device becomes unresponsive
 - Bouncer fails to load decisions silently
 - ipset operations timeout
 - Potential device crash requiring reboot
 
-**Ubiquiti's official guidance** (from their forums): UniFi firewall groups support "up to 55,000 IPs" but real-world stability varies by device model and workload.
+### How to monitor memory:
 
-**Recommendations:**
-1. Start with `maxelem` set to **40,000** in `setup.sh`
-2. Monitor device stability for 24-48 hours
-3. Increase gradually if stable (5K increments)
-4. If using [crowdsec-blocklist-import](https://github.com/wolffcatskyy/crowdsec-blocklist-import), filter your lists to stay under limits
-
-**Setting the limit in setup.sh:**
 ```bash
-# Edit /data/crowdsec-bouncer/setup.sh
-DESIRED_MAXELEM=40000  # Conservative default
+# Check available memory (run this periodically)
+cat /proc/meminfo | grep MemAvailable
+
+# Watch memory in real-time
+watch -n 5 'cat /proc/meminfo | grep MemAvailable'
+
+# Check ipset entry count
+ipset list crowdsec-blacklists | grep -c "^[0-9]"
+
+# Check memory log from ensure-rules.sh
+tail -f /data/crowdsec-bouncer/log/memory.log
+```
+
+**Target:** Keep MemAvailable above 300-500MB at all times.
+
+### Setting the limit:
+
+**In setup.sh (via environment):**
+```bash
+MAXELEM=30000 /data/crowdsec-bouncer/setup.sh
 ```
 
 **Also set in bouncer config:**
 ```yaml
 # /data/crowdsec-bouncer/crowdsec-firewall-bouncer.yaml
-ipset_size: 40000
+ipset_size: 30000
 ```
 
-Both values must match. The bouncer config `ipset_size` controls how many decisions the bouncer requests from LAPI, and `DESIRED_MAXELEM` controls the kernel ipset capacity.
+Both values must match. The bouncer config `ipset_size` controls how many decisions the bouncer requests from LAPI, and `MAXELEM` controls the kernel ipset capacity.
 
 **If you have more decisions than your limit allows:** The bouncer will load decisions up to your limit. Excess decisions are silently dropped. Use CrowdSec Console to manage which blocklists are pushed to your LAPI, or configure the bouncer to use a dedicated LAPI with filtered decisions.
 
@@ -99,7 +170,7 @@ Both values must match. The bouncer config `ipset_size` controls how many decisi
 | `bootstrap.sh` | One-line installer — downloads everything and runs setup |
 | `install.sh` | Downloads the official bouncer binary, installs to `/data/crowdsec-bouncer/` |
 | `setup.sh` | ExecStartPre script — loads ipset modules, creates ipset, adds iptables rules, re-links systemd service |
-| `detect-device.sh` | Auto-detects UniFi model and sets safe maxelem defaults |
+| `detect-device.sh` | Auto-detects UniFi model and sets conservative maxelem defaults |
 | `ensure-rules.sh` | Cron job (every 5 min) — re-adds iptables rules if controller reprovisioning removed them |
 | `metrics.sh` | Prometheus metrics endpoint for monitoring |
 | `crowdsec-firewall-bouncer.service` | systemd unit file for the bouncer |
@@ -184,7 +255,7 @@ nano /data/crowdsec-bouncer/crowdsec-firewall-bouncer.yaml
 ```yaml
 api_url: http://192.168.1.100:8081/    # Your CrowdSec LAPI address
 api_key: YOUR_BOUNCER_API_KEY           # From 'cscli bouncers add'
-ipset_size: 40000                        # MUST match DESIRED_MAXELEM in setup.sh
+ipset_size: 20000                        # Start conservative, increase gradually
 ```
 
 ### Config Reference
@@ -193,7 +264,7 @@ ipset_size: 40000                        # MUST match DESIRED_MAXELEM in setup.s
 |---------|---------|-------------|
 | `mode` | `ipset` | Use ipset for efficient IP matching |
 | `update_frequency` | `10s` | How often to poll LAPI for new decisions |
-| `ipset_size` | `40000` | Max IPs to request from LAPI — **set this!** |
+| `ipset_size` | `20000` | Max IPs to request from LAPI — **start low!** |
 | `disable_ipv6` | `true` | UniFi has issues with IPv6 firewall rules |
 | `deny_action` | `DROP` | `DROP` (silent) or `REJECT` (sends reset) |
 | `deny_log` | `false` | Log denied packets (can be noisy) |
@@ -241,6 +312,9 @@ tail -f /data/crowdsec-bouncer/log/crowdsec-firewall-bouncer.log
 
 # Check from CrowdSec LAPI host
 cscli bouncers list
+
+# IMPORTANT: Monitor memory!
+cat /proc/meminfo | grep MemAvailable
 ```
 
 ## How It Survives Firmware Updates
@@ -472,7 +546,7 @@ systemctl start crowdsec-firewall-bouncer
 **Device becomes unresponsive with large blocklist:**
 1. SSH in (if possible) and run: `systemctl stop crowdsec-firewall-bouncer`
 2. If SSH fails, reboot the device via UniFi app or physical power cycle
-3. Before restarting bouncer, reduce `ipset_size` in config and `DESIRED_MAXELEM` in setup.sh
+3. Before restarting bouncer, reduce `ipset_size` in config and `MAXELEM` in setup.sh
 4. See [Memory and ipset Limits](#memory-and-ipset-limits)
 
 ## Complete UniFi + CrowdSec Suite
