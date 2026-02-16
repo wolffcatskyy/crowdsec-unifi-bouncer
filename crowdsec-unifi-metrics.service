@@ -1,0 +1,20 @@
+[Unit]
+Description=CrowdSec UniFi Bouncer Prometheus Metrics
+After=network.target crowdsec-firewall-bouncer.service
+Wants=crowdsec-firewall-bouncer.service
+# On UDR, /data is a symlink to /ssd1/.data
+RequiresMountsFor=/data/crowdsec-bouncer
+
+[Service]
+Type=simple
+Environment=METRICS_PORT=9101
+Environment=BOUNCER_DIR=/data/crowdsec-bouncer
+Environment=IPSET_NAME=crowdsec-blacklists
+ExecStart=/data/crowdsec-bouncer/metrics.sh --serve
+Restart=always
+RestartSec=10
+StandardOutput=journal
+StandardError=journal
+
+[Install]
+WantedBy=multi-user.target
