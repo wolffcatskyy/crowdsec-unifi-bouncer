@@ -94,7 +94,6 @@ collect_metrics() {
 
     # --- Last Sync from memory.log ---
     local last_sync_timestamp=0
-    local last_sync_duration=0
 
     if [ -f "$MEMORY_LOG" ]; then
         local last_line

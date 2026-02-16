@@ -65,6 +65,7 @@ download() {
 FILES=(
     "install.sh"
     "setup.sh"
+    "detect-device.sh"
     "ensure-rules.sh"
     "metrics.sh"
     "crowdsec-firewall-bouncer.service"
@@ -86,6 +87,7 @@ done
 # Make scripts executable
 chmod +x "$BOUNCER_DIR/install.sh" \
          "$BOUNCER_DIR/setup.sh" \
+         "$BOUNCER_DIR/detect-device.sh" \
          "$BOUNCER_DIR/ensure-rules.sh" \
          "$BOUNCER_DIR/metrics.sh"
 
