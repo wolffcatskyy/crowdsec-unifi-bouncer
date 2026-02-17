@@ -1,61 +1,38 @@
 # Roadmap
 
-This document outlines the development direction for crowdsec-unifi-bouncer.
+Development direction for crowdsec-unifi-bouncer.
 
 ## Current Version
 
 **v2.0.0** (February 2026)
 
-Major rewrite from Python/Docker API-based bouncer to native ipset/iptables approach. Key features:
-- Native CrowdSec firewall bouncer binary (Go)
-- ipset-based blocking (no MongoDB thrashing)
-- Firmware update persistence via setup.sh
-- Controller reprovisioning recovery via ensure-rules.sh (cron)
+Native ipset/iptables implementation replacing the Python/Docker API approach:
+- Official CrowdSec firewall bouncer binary (Go)
+- ipset-based blocking — no MongoDB thrashing
+- Firmware update persistence
+- Controller reprovisioning recovery
 - Memory guardrail protection
-- Prometheus metrics endpoint
-- Auto device detection with conservative defaults
-- One-line bootstrap installer
+- Prometheus metrics
+- Device auto-detection
+- One-line installer
 
 ## Next Release: v2.1.0
 
-Planned improvements for the next minor release:
-
-### Community-Sourced ipset Limits
-- **Problem**: All maxelem values are untested estimates (20,000 for all devices)
-- **Solution**: Create a community database of verified stable limits
-- **Tasks**:
-  - Add `report-limits.sh` script to generate device/firmware/limit reports
-  - Document submission format in CONTRIBUTING.md
-  - Update detect-device.sh with verified limits as reports come in
-  - Add firmware version to detection output
-
 ### IPv6 Support
-- **Problem**: IPv6 disabled by default due to UniFi quirks
-- **Solution**: Test and document IPv6 firewall rules on each device model
-- **Tasks**:
-  - Test ip6tables rules on UDM SE, UDR, UCG devices
-  - Create separate ipset for IPv6 (hash:net family inet6)
-  - Add IPv6 toggle to config with clear documentation
-  - Update ensure-rules.sh for IPv6 rule persistence
+- Test ip6tables rules across device models
+- Separate ipset for IPv6 (hash:net family inet6)
+- Add IPv6 toggle with clear documentation
+- Update ensure-rules.sh for IPv6 persistence
 
 ### Alerting Integration
-- **Problem**: Memory guardrail triggers silently (only logged)
-- **Solution**: Optional alerting when guardrail activates or rules restored
-- **Tasks**:
-  - Add webhook support for guardrail events
-  - Document integration with ntfy, Telegram, Pushover
-  - Add alert deduplication (don't spam on repeated triggers)
+- Webhook support for guardrail events
+- Integration docs for ntfy, Telegram, Pushover
+- Alert deduplication
 
-## Future Releases: v2.2.0+
+## Future Releases
 
 ### UniFi Gateway Max Support
-- New device (12GB RAM) needs testing
-- Add to detect-device.sh once available
-
-### Auto-Tuning Mode
-- Experimental: Gradually increase maxelem while monitoring memory
-- Stop and report when memory threshold approached
-- Find safe limit automatically instead of manual testing
+- New device (12GB RAM) — add to detect-device.sh when available
 
 ### nftables Migration
 - Modern UniFi OS versions may support nftables
@@ -65,53 +42,32 @@ Planned improvements for the next minor release:
 ### Health Check API
 - Lightweight HTTP endpoint for external monitoring
 - Report: bouncer status, ipset count, memory, last sync
-- Complement existing Prometheus metrics
 
 ### Multi-LAPI Support
 - Connect to multiple CrowdSec LAPI instances
 - Aggregate decisions from different sources
-- Use case: separate internal/external threat feeds
 
 ## Known Limitations
 
-These are architectural constraints, not planned features:
-
 | Limitation | Reason | Workaround |
 |------------|--------|------------|
-| Cannot exceed device RAM | Hardware constraint | Use CrowdSec Console to filter blocklists |
+| Device capacity limits | Hardware constraint | Use CrowdSec Console to filter blocklists |
 | No GUI integration | UniFi API doesn't support custom rules | Monitor via Prometheus/Grafana |
-| ARM64 binary only | UniFi devices are ARM64 | N/A (correct architecture) |
+| ARM64 binary only | UniFi devices are ARM64 | N/A |
 | No official Ubiquiti support | Unofficial modification | Everything in /data/ persists |
 
-## Tested Device Matrix
+## Device Defaults
 
-Help us build this by reporting your results!
+| Device | Default | RAM |
+|--------|---------|-----|
+| UDM Pro Max | 30,000 | 8GB |
+| UDM Pro / SE | 20,000 | 4GB |
+| UDR / UCG | 15,000 | 2GB |
+| UniFi Express | 10,000 | 1GB |
 
-| Device | Firmware | Stable maxelem | RAM | Reporter |
-|--------|----------|----------------|-----|----------|
-| UDM SE | 4.x | 20,000 (untested higher) | 4GB | - |
-| UDR | 4.x | 20,000 (untested higher) | 2GB | - |
-| UDM Pro | - | Untested | 4GB | - |
-| UDM Pro Max | - | Untested | 8GB | - |
-| UCG Ultra | - | Untested | 2GB | - |
-| UniFi Express | - | Untested | 1GB | - |
-
-**To contribute**: Run with monitoring for 48+ hours, then open an issue with:
-- Device model
-- Firmware version
-- UniFi apps running (Protect, Talk, Access)
-- Stable maxelem achieved
-- MemAvailable at that level
-
-## Contributing
-
-See [CONTRIBUTING.md](CONTRIBUTING.md) for how to help with:
-- Device testing and limit reporting
-- Documentation improvements
-- Bug fixes and feature development
+Advanced users can increase `ipset_size` in config. Monitor for UI slowness or packet drops, which indicate the limit is too high for your device.
 
 ## Related Projects
 
-Complete UniFi + CrowdSec integration:
-- [crowdsec-unifi-parser](https://github.com/wolffcatskyy/crowdsec-unifi-parser) - Detect threats from UniFi firewall logs
-- [crowdsec-blocklist-import](https://github.com/wolffcatskyy/crowdsec-blocklist-import) - Import public threat feeds into CrowdSec
+- [crowdsec-unifi-parser](https://github.com/wolffcatskyy/crowdsec-unifi-parser) — Detect threats from UniFi firewall logs
+- [crowdsec-blocklist-import](https://github.com/wolffcatskyy/crowdsec-blocklist-import) — Import public threat feeds into CrowdSec
