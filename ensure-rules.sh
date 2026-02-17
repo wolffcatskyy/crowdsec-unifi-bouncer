@@ -19,7 +19,12 @@ MEM_THRESHOLD="${MEM_THRESHOLD:-200000}"
 MEM_AVAIL=$(awk '/^MemAvailable:/{print $2}' /proc/meminfo)
 IPSET_COUNT=$(ipset list "$IPSET_NAME" -t 2>/dev/null | awk '/^Number of entries:/{print $NF}')
 IPSET_COUNT="${IPSET_COUNT:-0}"
+IPSET_MAXELEM=$(ipset list "$IPSET_NAME" -t 2>/dev/null | awk '/^Maxelem:/{print $NF}')
+IPSET_MAXELEM="${IPSET_MAXELEM:-0}"
 BOUNCER_ACTIVE=$(systemctl is-active crowdsec-firewall-bouncer 2>/dev/null)
+
+# Capacity threshold percentage (95% = at capacity)
+CAPACITY_THRESHOLD="${CAPACITY_THRESHOLD:-95}"
 
 # Log ipset count and memory every run (rotate at 1000 lines)
 if [ -f "$LOGFILE" ] && [ "$(wc -l < "$LOGFILE")" -gt 1000 ]; then
@@ -35,6 +40,24 @@ if [ "$MEM_AVAIL" -lt "$MEM_THRESHOLD" ] && [ "$BOUNCER_ACTIVE" = "active" ] && 
     # Record guardrail event for Prometheus metrics
     [ -x "$METRICS_SCRIPT" ] && "$METRICS_SCRIPT" --record-guardrail 2>/dev/null || true
     exit 0
+fi
+
+# --- Capacity monitoring ---
+# Check if ipset is at/near capacity (decisions may be dropped)
+if [ "$IPSET_MAXELEM" -gt 0 ]; then
+    CAPACITY_USED=$((IPSET_COUNT * 100 / IPSET_MAXELEM))
+
+    if [ "$CAPACITY_USED" -ge "$CAPACITY_THRESHOLD" ]; then
+        # At capacity - decisions are being dropped
+        echo "$(date '+%F %T') CAPACITY: ipset at ${CAPACITY_USED}% ($IPSET_COUNT/$IPSET_MAXELEM) - decisions may be dropped" >> "$LOGFILE"
+        logger -t crowdsec-bouncer "CAPACITY WARNING: ipset at ${CAPACITY_USED}% ($IPSET_COUNT/$IPSET_MAXELEM) - increase maxelem or filter blocklists"
+    elif [ "$CAPACITY_USED" -ge 80 ]; then
+        # Approaching capacity - warn
+        echo "$(date '+%F %T') CAPACITY: ipset at ${CAPACITY_USED}% ($IPSET_COUNT/$IPSET_MAXELEM) - approaching limit" >> "$LOGFILE"
+    else
+        # Capacity OK - clear degraded status if previously set
+        [ -x "$METRICS_SCRIPT" ] && "$METRICS_SCRIPT" --clear-degraded 2>/dev/null || true
+    fi
 fi
 
 # --- Rule persistence (existing behavior) ---

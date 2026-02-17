@@ -569,6 +569,8 @@ curl http://localhost:9101/metrics
 | `crowdsec_unifi_bouncer_decisions_dropped_total` | Counter | Decisions dropped due to ipset capacity |
 | `crowdsec_unifi_bouncer_capacity_events_total` | Counter | Number of "set is full" events |
 | `crowdsec_unifi_bouncer_last_capacity_event_timestamp` | Gauge | Unix timestamp of last capacity error |
+| `crowdsec_unifi_bouncer_capacity_percent` | Gauge | Current ipset usage percentage (0-100) |
+| `crowdsec_unifi_bouncer_degraded` | Gauge | Bouncer at capacity, dropping decisions (1=yes) |
 
 ### Prometheus Configuration
 
@@ -612,14 +614,20 @@ crowdsec_unifi_bouncer_memory_available_kb < 300000
 # Rule restoration rate (indicates controller reprovisioning)
 rate(crowdsec_unifi_bouncer_rules_restored_total[1h])
 
+# Alert: bouncer degraded (at capacity, dropping decisions)
+crowdsec_unifi_bouncer_degraded == 1
+
 # Decisions dropped due to capacity
 crowdsec_unifi_bouncer_decisions_dropped_total
 
-# Capacity event rate (decisions being dropped)
-rate(crowdsec_unifi_bouncer_decisions_dropped_total[1h])
+# Dropped decisions rate (decisions per hour that couldn't be added)
+rate(crowdsec_unifi_bouncer_decisions_dropped_total[1h]) * 3600
 
 # Alert: decisions are being dropped
 increase(crowdsec_unifi_bouncer_capacity_events_total[5m]) > 0
+
+# Capacity percentage
+crowdsec_unifi_bouncer_capacity_percent
 
 # Time since last capacity event (0 = never happened)
 time() - crowdsec_unifi_bouncer_last_capacity_event_timestamp
