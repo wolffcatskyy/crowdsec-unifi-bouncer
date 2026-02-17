@@ -43,7 +43,7 @@ ipset_size: 40000
 - Network latency increases
 - Packet drops appear
 
-The bottleneck isn't memory — it's ipset operation latency in the kernel network path. If you see these symptoms, reduce `ipset_size` and restart.
+Large ipsets consume memory and add latency to every packet lookup. If you see these symptoms, reduce `ipset_size` and restart.
 
 ## What's Included
 
