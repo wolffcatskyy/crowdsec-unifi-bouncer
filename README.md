@@ -30,20 +30,9 @@ The bouncer auto-detects your UniFi device and applies tested defaults:
 
 These limits balance protection coverage with device stability. Most CrowdSec deployments with standard community blocklists stay well under 20,000 active decisions.
 
-### Advanced: Increasing Limits
+### Custom Limits
 
-If you need higher capacity, set `ipset_size` in the bouncer config:
-
-```yaml
-ipset_size: 40000
-```
-
-**Signs you've gone too high:**
-- UniFi UI becomes sluggish
-- Network latency increases
-- Packet drops appear
-
-Large ipsets consume memory and add latency to every packet lookup. If you see these symptoms, reduce `ipset_size` and restart.
+To use a different limit, set `ipset_size` in the bouncer config. Higher values increase memory usage and packet processing time.
 
 ## What's Included
 
