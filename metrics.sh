@@ -113,9 +113,15 @@ collect_metrics() {
     local errors_total
     local guardrail_triggered_total
     local rules_restored_total
+    local decisions_dropped_total
+    local capacity_events_total
+    local last_capacity_event
     errors_total=$(read_counter "errors_total")
     guardrail_triggered_total=$(read_counter "guardrail_triggered_total")
     rules_restored_total=$(read_counter "rules_restored_total")
+    decisions_dropped_total=$(read_counter "decisions_dropped_total")
+    capacity_events_total=$(read_counter "capacity_events_total")
+    last_capacity_event=$(read_counter "last_capacity_event")
 
     # --- Output Prometheus Format ---
     cat << METRICSEOF
@@ -166,6 +172,18 @@ crowdsec_unifi_bouncer_guardrail_triggered_total $guardrail_triggered_total
 # HELP crowdsec_unifi_bouncer_rules_restored_total Number of times iptables rules were re-added after removal
 # TYPE crowdsec_unifi_bouncer_rules_restored_total counter
 crowdsec_unifi_bouncer_rules_restored_total $rules_restored_total
+
+# HELP crowdsec_unifi_bouncer_decisions_dropped_total Total decisions dropped due to ipset capacity (set is full)
+# TYPE crowdsec_unifi_bouncer_decisions_dropped_total counter
+crowdsec_unifi_bouncer_decisions_dropped_total $decisions_dropped_total
+
+# HELP crowdsec_unifi_bouncer_capacity_events_total Number of ipset capacity events (times set was full)
+# TYPE crowdsec_unifi_bouncer_capacity_events_total counter
+crowdsec_unifi_bouncer_capacity_events_total $capacity_events_total
+
+# HELP crowdsec_unifi_bouncer_last_capacity_event_timestamp Unix timestamp of last ipset capacity error (0 if never)
+# TYPE crowdsec_unifi_bouncer_last_capacity_event_timestamp gauge
+crowdsec_unifi_bouncer_last_capacity_event_timestamp $last_capacity_event
 
 # HELP crowdsec_unifi_bouncer_scrape_timestamp Unix timestamp when these metrics were collected
 # TYPE crowdsec_unifi_bouncer_scrape_timestamp gauge
@@ -228,6 +246,30 @@ record_rule_restored() {
     increment_counter "rules_restored_total" >/dev/null
 }
 
+record_decisions_dropped() {
+    local count="${2:-1}"
+    init_state
+    # Add new counters if they don't exist (upgrade path)
+    if ! grep -q "^decisions_dropped_total=" "$STATE_FILE" 2>/dev/null; then
+        echo "decisions_dropped_total=0" >> "$STATE_FILE"
+    fi
+    if ! grep -q "^capacity_events_total=" "$STATE_FILE" 2>/dev/null; then
+        echo "capacity_events_total=0" >> "$STATE_FILE"
+    fi
+    if ! grep -q "^last_capacity_event=" "$STATE_FILE" 2>/dev/null; then
+        echo "last_capacity_event=0" >> "$STATE_FILE"
+    fi
+    # Increment dropped count
+    local current
+    current=$(read_counter "decisions_dropped_total")
+    local new=$((current + count))
+    sed -i "s/^decisions_dropped_total=.*/decisions_dropped_total=${new}/" "$STATE_FILE"
+    # Increment event count
+    increment_counter "capacity_events_total" >/dev/null
+    # Update last event timestamp
+    sed -i "s/^last_capacity_event=.*/last_capacity_event=$(date +%s)/" "$STATE_FILE"
+}
+
 # Main
 case "${1:-}" in
     --serve)
@@ -242,6 +284,10 @@ case "${1:-}" in
     --record-rule-restored)
         record_rule_restored
         ;;
+    --record-dropped)
+        shift
+        record_decisions_dropped "" "${1:-1}"
+        ;;
     --help|-h)
         cat << HELPEOF
 CrowdSec UniFi Bouncer - Prometheus Metrics
@@ -250,10 +296,11 @@ Usage:
   $0              Output metrics to stdout (for debugging)
   $0 --serve      Start HTTP server on port \$METRICS_PORT (default: 9101)
 
-Recording helpers (for use by ensure-rules.sh):
+Recording helpers (for use by ensure-rules.sh and ipset-capacity-monitor.sh):
   $0 --record-error          Increment errors_total counter
   $0 --record-guardrail      Increment guardrail_triggered_total counter
   $0 --record-rule-restored  Increment rules_restored_total counter
+  $0 --record-dropped [N]    Record N decisions dropped due to capacity (default: 1)
 
 Environment variables:
   METRICS_PORT    HTTP server port (default: 9101)
