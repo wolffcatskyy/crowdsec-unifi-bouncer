@@ -70,11 +70,19 @@ scrape_configs:
 | **ipset Usage Over Time** | Blocked IPs vs max capacity with threshold lines |
 | **Memory Over Time** | Available memory with threshold lines |
 
-### Event Row (Bottom)
+### Event Row (Middle-Bottom)
 | Panel | Description |
 |-------|-------------|
 | **Event Counters** | Rules restored, guardrail triggers, and errors over time |
 | **ipset Fill Ratio Over Time** | Percentage fill over time |
+
+### Capacity Row (Bottom)
+| Panel | Description |
+|-------|-------------|
+| **Capacity Status** | Normal/DEGRADED indicator (degraded = at capacity, dropping decisions) |
+| **Decisions Dropped** | Total count of decisions that couldn't be added to ipset |
+| **Capacity %** | Gauge showing current capacity usage (red >95%) |
+| **Decisions Dropped Rate** | Rate of dropped decisions per minute over time |
 
 ## Available Metrics
 
@@ -94,6 +102,9 @@ The UniFi metrics endpoint exposes these Prometheus metrics:
 | `crowdsec_unifi_bouncer_errors_total` | Counter | Total errors encountered |
 | `crowdsec_unifi_bouncer_guardrail_triggered_total` | Counter | Memory guardrail activations |
 | `crowdsec_unifi_bouncer_rules_restored_total` | Counter | Times iptables rules were re-added |
+| `crowdsec_unifi_bouncer_decisions_dropped_total` | Counter | Decisions that couldn't be added (ipset full) |
+| `crowdsec_unifi_bouncer_capacity_percent` | Gauge | Current ipset usage percentage (0-100) |
+| `crowdsec_unifi_bouncer_degraded` | Gauge | Bouncer at capacity and dropping decisions (1=yes) |
 
 ## Variables
 
@@ -152,6 +163,24 @@ groups:
           severity: warning
         annotations:
           summary: "CrowdSec memory guardrail triggered on {{ $labels.instance }}"
+
+      # Bouncer degraded (at capacity, dropping decisions)
+      - alert: CrowdSecBouncerDegraded
+        expr: crowdsec_unifi_bouncer_degraded == 1
+        for: 5m
+        labels:
+          severity: critical
+        annotations:
+          summary: "CrowdSec bouncer at capacity on {{ $labels.instance }} - decisions being dropped"
+          description: "ipset is full. Increase maxelem or reduce blocklist subscriptions."
+
+      # Decisions being dropped
+      - alert: CrowdSecDecisionsDropped
+        expr: increase(crowdsec_unifi_bouncer_decisions_dropped_total[1h]) > 0
+        labels:
+          severity: warning
+        annotations:
+          summary: "{{ $value }} CrowdSec decisions dropped on {{ $labels.instance }} in last hour"
 ```
 
 ## Troubleshooting

@@ -28,7 +28,24 @@ init_state() {
 errors_total=0
 guardrail_triggered_total=0
 rules_restored_total=0
+decisions_dropped_total=0
+capacity_events_total=0
+last_capacity_event=0
+degraded=0
 STATEOF
+    fi
+    # Ensure new fields exist in old state files (upgrade path)
+    if ! grep -q "^decisions_dropped_total=" "$STATE_FILE" 2>/dev/null; then
+        echo "decisions_dropped_total=0" >> "$STATE_FILE"
+    fi
+    if ! grep -q "^capacity_events_total=" "$STATE_FILE" 2>/dev/null; then
+        echo "capacity_events_total=0" >> "$STATE_FILE"
+    fi
+    if ! grep -q "^last_capacity_event=" "$STATE_FILE" 2>/dev/null; then
+        echo "last_capacity_event=0" >> "$STATE_FILE"
+    fi
+    if ! grep -q "^degraded=" "$STATE_FILE" 2>/dev/null; then
+        echo "degraded=0" >> "$STATE_FILE"
     fi
 }
 
@@ -44,6 +61,32 @@ increment_counter() {
     local current
     current=$(read_counter "$name")
     local new=$((current + 1))
+    if grep -q "^${name}=" "$STATE_FILE" 2>/dev/null; then
+        sed -i "s/^${name}=.*/${name}=${new}/" "$STATE_FILE"
+    else
+        echo "${name}=${new}" >> "$STATE_FILE"
+    fi
+    echo "$new"
+}
+
+# Set counter to specific value in state file
+set_counter() {
+    local name="$1"
+    local value="$2"
+    if grep -q "^${name}=" "$STATE_FILE" 2>/dev/null; then
+        sed -i "s/^${name}=.*/${name}=${value}/" "$STATE_FILE"
+    else
+        echo "${name}=${value}" >> "$STATE_FILE"
+    fi
+}
+
+# Add to counter (for batch increments)
+add_counter() {
+    local name="$1"
+    local amount="$2"
+    local current
+    current=$(read_counter "$name")
+    local new=$((current + amount))
     if grep -q "^${name}=" "$STATE_FILE" 2>/dev/null; then
         sed -i "s/^${name}=.*/${name}=${new}/" "$STATE_FILE"
     else
@@ -116,12 +159,28 @@ collect_metrics() {
     local decisions_dropped_total
     local capacity_events_total
     local last_capacity_event
+    local degraded
     errors_total=$(read_counter "errors_total")
     guardrail_triggered_total=$(read_counter "guardrail_triggered_total")
     rules_restored_total=$(read_counter "rules_restored_total")
     decisions_dropped_total=$(read_counter "decisions_dropped_total")
     capacity_events_total=$(read_counter "capacity_events_total")
     last_capacity_event=$(read_counter "last_capacity_event")
+    degraded=$(read_counter "degraded")
+
+    # --- Capacity metrics ---
+    local capacity_percent=0
+    if [ "$ipset_maxelem" -gt 0 ]; then
+        capacity_percent=$(awk "BEGIN {printf \"%.2f\", ($ipset_entries / $ipset_maxelem) * 100}")
+    fi
+
+    # Auto-set degraded if at capacity (>= 95%)
+    if [ "$ipset_maxelem" -gt 0 ] && [ "$ipset_entries" -ge "$((ipset_maxelem * 95 / 100))" ]; then
+        if [ "$degraded" != "1" ]; then
+            set_counter "degraded" 1
+            degraded=1
+        fi
+    fi
 
     # --- Output Prometheus Format ---
     cat << METRICSEOF
@@ -185,6 +244,14 @@ crowdsec_unifi_bouncer_capacity_events_total $capacity_events_total
 # TYPE crowdsec_unifi_bouncer_last_capacity_event_timestamp gauge
 crowdsec_unifi_bouncer_last_capacity_event_timestamp $last_capacity_event
 
+# HELP crowdsec_unifi_bouncer_capacity_percent Current ipset usage as a percentage (0-100)
+# TYPE crowdsec_unifi_bouncer_capacity_percent gauge
+crowdsec_unifi_bouncer_capacity_percent $capacity_percent
+
+# HELP crowdsec_unifi_bouncer_degraded Whether the bouncer is at capacity and dropping decisions (1=degraded, 0=normal)
+# TYPE crowdsec_unifi_bouncer_degraded gauge
+crowdsec_unifi_bouncer_degraded $degraded
+
 # HELP crowdsec_unifi_bouncer_scrape_timestamp Unix timestamp when these metrics were collected
 # TYPE crowdsec_unifi_bouncer_scrape_timestamp gauge
 crowdsec_unifi_bouncer_scrape_timestamp $timestamp
@@ -247,27 +314,21 @@ record_rule_restored() {
 }
 
 record_decisions_dropped() {
-    local count="${2:-1}"
+    local count="${1:-1}"
     init_state
-    # Add new counters if they don't exist (upgrade path)
-    if ! grep -q "^decisions_dropped_total=" "$STATE_FILE" 2>/dev/null; then
-        echo "decisions_dropped_total=0" >> "$STATE_FILE"
-    fi
-    if ! grep -q "^capacity_events_total=" "$STATE_FILE" 2>/dev/null; then
-        echo "capacity_events_total=0" >> "$STATE_FILE"
-    fi
-    if ! grep -q "^last_capacity_event=" "$STATE_FILE" 2>/dev/null; then
-        echo "last_capacity_event=0" >> "$STATE_FILE"
-    fi
     # Increment dropped count
-    local current
-    current=$(read_counter "decisions_dropped_total")
-    local new=$((current + count))
-    sed -i "s/^decisions_dropped_total=.*/decisions_dropped_total=${new}/" "$STATE_FILE"
+    add_counter "decisions_dropped_total" "$count" >/dev/null
     # Increment event count
     increment_counter "capacity_events_total" >/dev/null
     # Update last event timestamp
-    sed -i "s/^last_capacity_event=.*/last_capacity_event=$(date +%s)/" "$STATE_FILE"
+    set_counter "last_capacity_event" "$(date +%s)"
+    # Set degraded flag
+    set_counter "degraded" 1
+}
+
+clear_degraded() {
+    init_state
+    set_counter "degraded" 0
 }
 
 # Main
@@ -284,9 +345,12 @@ case "${1:-}" in
     --record-rule-restored)
         record_rule_restored
         ;;
-    --record-dropped)
-        shift
-        record_decisions_dropped "" "${1:-1}"
+    --record-dropped|--record-decisions-dropped)
+        # Usage: --record-dropped [count] or --record-decisions-dropped [count]
+        record_decisions_dropped "${2:-1}"
+        ;;
+    --clear-degraded)
+        clear_degraded
         ;;
     --help|-h)
         cat << HELPEOF
@@ -297,10 +361,12 @@ Usage:
   $0 --serve      Start HTTP server on port \$METRICS_PORT (default: 9101)
 
 Recording helpers (for use by ensure-rules.sh and ipset-capacity-monitor.sh):
-  $0 --record-error          Increment errors_total counter
-  $0 --record-guardrail      Increment guardrail_triggered_total counter
-  $0 --record-rule-restored  Increment rules_restored_total counter
-  $0 --record-dropped [N]    Record N decisions dropped due to capacity (default: 1)
+  $0 --record-error              Increment errors_total counter
+  $0 --record-guardrail          Increment guardrail_triggered_total counter
+  $0 --record-rule-restored      Increment rules_restored_total counter
+  $0 --record-dropped [N]        Record N decisions dropped due to capacity (default: 1)
+  $0 --record-decisions-dropped [N]  Alias for --record-dropped
+  $0 --clear-degraded            Clear degraded status (after capacity freed)
 
 Environment variables:
   METRICS_PORT    HTTP server port (default: 9101)
