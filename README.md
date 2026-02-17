@@ -106,6 +106,71 @@ RECOMMENDED:
 MAXELEM=30000 /data/crowdsec-bouncer/setup.sh
 ```
 
+### Auto-Detection from RAM (NEW)
+
+Instead of using the conservative 20,000 default, you can enable automatic maxelem calculation based on available RAM:
+
+```bash
+# Enable auto-detection (calculates from available RAM)
+AUTO_MAXELEM=true /data/crowdsec-bouncer/setup.sh
+```
+
+**How it works:**
+- Queries `/proc/meminfo` for `MemAvailable`
+- Uses a conservative 10% of available RAM budget
+- Assumes ~100 bytes overhead per ipset entry (includes kernel allocation overhead)
+- Rounds down to nearest 5,000
+- Applies minimum of 10,000 and maximum of 200,000
+
+**Formula:** `maxelem = available_ram_kb` (approximately, with bounds applied)
+
+This is intentionally conservative. Real-world testing shows UniFi devices can become unstable with large ipsets even when RAM appears available, due to kernel memory fragmentation and ipset operation latency.
+
+**Example on a UDM-SE with 1.5GB available:**
+```
+Available: 1,536,000 KB
+Calculation: 1,536,000 -> capped at 200,000
+Result: 200,000 entries
+```
+
+**Example on a UDR with 500MB available:**
+```
+Available: 512,000 KB
+Calculation: 512,000 -> rounded to 510,000, capped at 200,000
+Result: 200,000 entries
+```
+
+**To enable permanently**, edit the systemd service:
+```bash
+nano /data/crowdsec-bouncer/crowdsec-firewall-bouncer.service
+```
+
+Add to `[Service]` section:
+```ini
+Environment=AUTO_MAXELEM=true
+```
+
+Then reload:
+```bash
+systemctl daemon-reload
+systemctl restart crowdsec-firewall-bouncer
+```
+
+**Priority order:**
+1. `MAXELEM` environment variable (explicit override, always wins)
+2. `AUTO_MAXELEM=true` - calculate from available RAM
+3. Conservative default (20,000)
+
+**When to use AUTO_MAXELEM:**
+- You want the bouncer to adapt to your device's current memory state
+- You're running on a device with plenty of RAM (4GB+)
+- You've tested and confirmed stability on your specific device
+
+**When NOT to use AUTO_MAXELEM:**
+- You need a predictable, fixed ipset size
+- You're running memory-intensive UniFi apps (Protect with many cameras)
+- You prefer the safer, tested-over-time conservative approach
+
 ## Memory and ipset Limits
 
 ### Conservative Defaults (UNTESTED)
@@ -148,10 +213,17 @@ tail -f /data/crowdsec-bouncer/log/memory.log
 
 ### Setting the limit:
 
-**In setup.sh (via environment):**
+**Option 1: Manual override (explicit value):**
 ```bash
 MAXELEM=30000 /data/crowdsec-bouncer/setup.sh
 ```
+
+**Option 2: Auto-detect from RAM:**
+```bash
+AUTO_MAXELEM=true /data/crowdsec-bouncer/setup.sh
+```
+
+See [Auto-Detection from RAM](#auto-detection-from-ram-new) for details.
 
 **Also set in bouncer config:**
 ```yaml
