@@ -233,7 +233,7 @@ ipset_size: 30000
 
 Both values must match. The bouncer config `ipset_size` controls how many decisions the bouncer requests from LAPI, and `MAXELEM` controls the kernel ipset capacity.
 
-**If you have more decisions than your limit allows:** The bouncer will load decisions up to your limit. Excess decisions are silently dropped. Use CrowdSec Console to manage which blocklists are pushed to your LAPI, or configure the bouncer to use a dedicated LAPI with filtered decisions.
+**If you have more decisions than your limit allows:** The bouncer will load decisions up to your limit. When ipset reaches capacity, the kernel returns "set is full" errors. This repo includes a capacity monitor that detects these errors, logs them gracefully, and exposes metrics - so you know exactly when and how many decisions are being dropped. See [Capacity Monitoring](#capacity-monitoring) below.
 
 ## What's Included
 
@@ -244,6 +244,7 @@ Both values must match. The bouncer config `ipset_size` controls how many decisi
 | `setup.sh` | ExecStartPre script — loads ipset modules, creates ipset, adds iptables rules, re-links systemd service |
 | `detect-device.sh` | Auto-detects UniFi model and sets conservative maxelem defaults |
 | `ensure-rules.sh` | Cron job (every 5 min) — re-adds iptables rules if controller reprovisioning removed them |
+| `ipset-capacity-monitor.sh` | Monitors for "set is full" errors, logs dropped decisions, updates metrics |
 | `metrics.sh` | Prometheus metrics endpoint for monitoring |
 | `crowdsec-firewall-bouncer.service` | systemd unit file for the bouncer |
 | `crowdsec-unifi-metrics.service` | systemd unit file for the metrics endpoint |
@@ -451,6 +452,88 @@ MEM_THRESHOLD=150000 /data/crowdsec-bouncer/ensure-rules.sh
 
 **CrowdSec Console warning:** If your CrowdSec instance is enrolled in the [CrowdSec Console](https://app.crowdsec.net) with `console_management` enabled, the console can push large numbers of blocklist decisions via CAPI. These bypass any local controls and are loaded by the bouncer like any other decision. Check with `cscli console status` and disable with `cscli console disable console_management` if needed.
 
+## Capacity Monitoring
+
+When ipset reaches its maxelem limit, the kernel returns "set is full" errors and new IPs cannot be added. Instead of crashing or failing silently, the `ipset-capacity-monitor.sh` script:
+
+1. **Detects capacity errors** by monitoring the bouncer log for "set is full" messages
+2. **Logs warnings** to `/data/crowdsec-bouncer/log/capacity.log` with details
+3. **Tracks metrics** for dropped decisions (exposed via Prometheus)
+4. **Continues operating** - existing blocked IPs remain in place
+
+### Enable Capacity Monitoring
+
+Add to cron (alongside ensure-rules.sh):
+
+```bash
+# Check capacity every 5 minutes
+(crontab -l 2>/dev/null; echo "*/5 * * * * /data/crowdsec-bouncer/ipset-capacity-monitor.sh --check") | crontab -
+```
+
+Or run continuously via systemd (optional):
+
+```bash
+# Create a simple service file
+cat > /data/crowdsec-bouncer/crowdsec-capacity-monitor.service << 'EOF'
+[Unit]
+Description=CrowdSec ipset Capacity Monitor
+After=crowdsec-firewall-bouncer.service
+
+[Service]
+Type=simple
+ExecStart=/data/crowdsec-bouncer/ipset-capacity-monitor.sh --watch
+Restart=always
+RestartSec=30
+
+[Install]
+WantedBy=multi-user.target
+EOF
+
+ln -sf /data/crowdsec-bouncer/crowdsec-capacity-monitor.service /etc/systemd/system/
+systemctl daemon-reload
+systemctl enable --now crowdsec-capacity-monitor
+```
+
+### Check Capacity Status
+
+```bash
+# Show current status and dropped decision count
+/data/crowdsec-bouncer/ipset-capacity-monitor.sh --status
+
+# Example output:
+# === ipset Capacity Status ===
+#
+# Current Usage:
+#   Entries:     18500 / 20000
+#   Fill Ratio:  92.50%
+#
+# Dropped Decisions (cumulative):
+#   Total dropped:    127
+#   Capacity events:  3
+#   Last event:       2026-02-17 10:30:45
+#
+# Status: WARNING - Approaching capacity limit
+# Action: Monitor closely, consider reducing blocklist size
+```
+
+### Capacity Log
+
+Events are logged to `/data/crowdsec-bouncer/log/capacity.log`:
+
+```
+2026-02-17 10:30:45 CAPACITY_ERROR: 5 decision(s) dropped - ipset full
+  Current: 20000/20000 entries (100.00% full)
+  Sample dropped IPs: 192.0.2.1 198.51.100.5 203.0.113.10
+2026-02-17 10:35:00 WARNING: ipset CRITICAL - 100.00% full (20000/20000)
+```
+
+### What to Do When Capacity Is Reached
+
+1. **Reduce blocklist size** - Disable some blocklists in CrowdSec Console or LAPI
+2. **Increase maxelem** - Edit `MAXELEM` in setup.sh and `ipset_size` in bouncer config (if device has headroom)
+3. **Use a dedicated LAPI** - Configure a separate LAPI instance with filtered/prioritized decisions
+4. **Accept partial coverage** - The most important IPs (most recent decisions) are typically loaded first
+
 ## Prometheus Metrics
 
 A lightweight Prometheus metrics endpoint exposes UniFi-specific operational metrics. This complements the official bouncer's built-in Prometheus support (which tracks decision-related metrics) with metrics about the persistence layer.
@@ -483,6 +566,9 @@ curl http://localhost:9101/metrics
 | `crowdsec_unifi_bouncer_errors_total` | Counter | Total errors encountered |
 | `crowdsec_unifi_bouncer_guardrail_triggered_total` | Counter | Memory guardrail activations |
 | `crowdsec_unifi_bouncer_rules_restored_total` | Counter | Times iptables rules were re-added |
+| `crowdsec_unifi_bouncer_decisions_dropped_total` | Counter | Decisions dropped due to ipset capacity |
+| `crowdsec_unifi_bouncer_capacity_events_total` | Counter | Number of "set is full" events |
+| `crowdsec_unifi_bouncer_last_capacity_event_timestamp` | Gauge | Unix timestamp of last capacity error |
 
 ### Prometheus Configuration
 
@@ -505,6 +591,7 @@ A ready-to-import Grafana dashboard is included at `grafana/crowdsec-unifi-bounc
 - Available memory
 - iptables rules status
 - Guardrail trigger count
+- Dropped decisions counter
 - Historical graphs for IPs, memory, and events
 
 **Example PromQL queries** for custom dashboards:
@@ -524,6 +611,18 @@ crowdsec_unifi_bouncer_memory_available_kb < 300000
 
 # Rule restoration rate (indicates controller reprovisioning)
 rate(crowdsec_unifi_bouncer_rules_restored_total[1h])
+
+# Decisions dropped due to capacity
+crowdsec_unifi_bouncer_decisions_dropped_total
+
+# Capacity event rate (decisions being dropped)
+rate(crowdsec_unifi_bouncer_decisions_dropped_total[1h])
+
+# Alert: decisions are being dropped
+increase(crowdsec_unifi_bouncer_capacity_events_total[5m]) > 0
+
+# Time since last capacity event (0 = never happened)
+time() - crowdsec_unifi_bouncer_last_capacity_event_timestamp
 ```
 
 ### Configuration

@@ -67,6 +67,7 @@ FILES=(
     "setup.sh"
     "detect-device.sh"
     "ensure-rules.sh"
+    "ipset-capacity-monitor.sh"
     "metrics.sh"
     "crowdsec-firewall-bouncer.service"
     "crowdsec-unifi-metrics.service"
@@ -89,6 +90,7 @@ chmod +x "$BOUNCER_DIR/install.sh" \
          "$BOUNCER_DIR/setup.sh" \
          "$BOUNCER_DIR/detect-device.sh" \
          "$BOUNCER_DIR/ensure-rules.sh" \
+         "$BOUNCER_DIR/ipset-capacity-monitor.sh" \
          "$BOUNCER_DIR/metrics.sh"
 
 # Run the installer
