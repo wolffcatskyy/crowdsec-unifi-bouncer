@@ -107,6 +107,72 @@ get_total_memory_mb() {
     fi
 }
 
+get_available_memory_kb() {
+    local mem_kb
+    mem_kb=$(grep MemAvailable /proc/meminfo 2>/dev/null | awk '{print $2}')
+    if [ -n "$mem_kb" ]; then
+        echo "$mem_kb"
+    else
+        echo "0"
+    fi
+}
+
+# =============================================================================
+# AUTO-DETECTION OF SAFE MAXELEM FROM RAM
+# =============================================================================
+# Each ipset hash:net entry uses approximately 60 bytes of kernel memory for
+# the entry itself, but kernel memory allocation has overhead. Additionally,
+# ipset operations (add/delete/match) have CPU costs that scale with size.
+#
+# Real-world testing shows that UniFi devices can become unstable with large
+# ipsets even when RAM appears available. This is likely due to:
+# - Kernel memory fragmentation
+# - ipset operation latency affecting network performance
+# - UniFi applications (Protect, Network) competing for resources
+#
+# Conservative formula: use 10% of available RAM, 100 bytes per entry overhead
+# This intentionally errs on the side of stability over capacity.
+#
+# Formula: maxelem = (available_ram_kb * 0.10 * 1024) / 100
+#        = available_ram_kb * 1.024 (approximately available_kb)
+#
+# We round down to nearest 5000 for cleaner values.
+# Minimum: 10,000 entries (to be useful)
+# Maximum: 200,000 entries (practical limit even for high-RAM devices)
+# =============================================================================
+
+calculate_maxelem_from_ram() {
+    local available_kb
+    available_kb=$(get_available_memory_kb)
+
+    if [ "$available_kb" -eq 0 ]; then
+        echo "$DEFAULT_MAXELEM"
+        return
+    fi
+
+    # Conservative: use 10% of available RAM, assume 100 bytes overhead per entry
+    # available_kb * 1024 bytes/kb * 0.10 / 100 bytes/entry = available_kb * 1.024
+    # Simplify to: available_kb (approximately 1 entry per KB of 10% budget)
+    local raw_maxelem
+    raw_maxelem=$(( available_kb ))
+
+    # Round down to nearest 5000 for cleaner values
+    local rounded_maxelem
+    rounded_maxelem=$(( (raw_maxelem / 5000) * 5000 ))
+
+    # Apply minimum of 10,000
+    if [ "$rounded_maxelem" -lt 10000 ]; then
+        rounded_maxelem=10000
+    fi
+
+    # Apply maximum of 200,000 (even 8GB devices shouldn't need more)
+    if [ "$rounded_maxelem" -gt 200000 ]; then
+        rounded_maxelem=200000
+    fi
+
+    echo "$rounded_maxelem"
+}
+
 print_warning() {
     echo ""
     echo "=========================================================================="
@@ -148,22 +214,34 @@ if [[ "${BASH_SOURCE[0]}" == "${0}" ]]; then
     DETECTED_MODEL=$(detect_device_model)
     SAFE_MAXELEM=$(get_safe_maxelem "$DETECTED_MODEL")
     TOTAL_MEM=$(get_total_memory_mb)
+    AVAILABLE_MEM_KB=$(get_available_memory_kb)
+    AUTO_CALCULATED_MAXELEM=$(calculate_maxelem_from_ram)
 
     echo "=== UniFi Device Detection ==="
     echo "Detected model: ${DETECTED_MODEL:-Unknown}"
     echo "Total memory: ${TOTAL_MEM}MB"
-    echo "Suggested maxelem: $SAFE_MAXELEM (CONSERVATIVE DEFAULT)"
+    echo "Available memory: $((AVAILABLE_MEM_KB / 1024))MB"
+    echo ""
+    echo "=== Maxelem Options ==="
+    echo "Conservative default: $SAFE_MAXELEM (UNTESTED)"
+    echo "Auto-calculated from RAM: $AUTO_CALCULATED_MAXELEM (conservative, based on 10% of available RAM)"
+    echo ""
+    echo "To use auto-calculated value, set: AUTO_MAXELEM=true"
 
     print_warning "$SAFE_MAXELEM"
 
     if [ -n "$MAXELEM" ]; then
         echo "Configured MAXELEM: $MAXELEM"
         validate_maxelem "$MAXELEM" "$SAFE_MAXELEM" "$DETECTED_MODEL"
+    elif [ "${AUTO_MAXELEM:-false}" = "true" ]; then
+        echo "AUTO_MAXELEM=true: Will use auto-calculated value: $AUTO_CALCULATED_MAXELEM"
     else
         echo "MAXELEM not set, will use conservative default: $SAFE_MAXELEM"
+        echo "Set AUTO_MAXELEM=true to auto-detect from available RAM instead."
     fi
 fi
 
 # Export variables when sourced
 DETECTED_MODEL=$(detect_device_model)
 SAFE_MAXELEM=$(get_safe_maxelem "$DETECTED_MODEL")
+AUTO_CALCULATED_MAXELEM=$(calculate_maxelem_from_ram)
