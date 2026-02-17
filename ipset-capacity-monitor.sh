@@ -25,7 +25,6 @@ IPSET_NAME="${IPSET_NAME:-crowdsec-blacklists}"
 CAPACITY_LOG="${CAPACITY_LOG:-$BOUNCER_DIR/log/capacity.log}"
 STATE_FILE="${STATE_FILE:-$BOUNCER_DIR/metrics-state}"
 BOUNCER_LOG="$BOUNCER_DIR/log/crowdsec-firewall-bouncer.log"
-METRICS_SCRIPT="$BOUNCER_DIR/metrics.sh"
 
 # Last processed line marker (to avoid duplicate counting)
 MARKER_FILE="$BOUNCER_DIR/.capacity-monitor-marker"
