@@ -63,23 +63,28 @@ if [ ! -f "$BOUNCER_DIR/crowdsec-firewall-bouncer.yaml" ]; then
 fi
 
 # Install scripts and service files
-for script in setup.sh detect-device.sh ensure-rules.sh metrics.sh crowdsec-firewall-bouncer.service crowdsec-unifi-metrics.service; do
+for script in setup.sh detect-device.sh ensure-rules.sh ipset-capacity-monitor.sh metrics.sh crowdsec-firewall-bouncer.service crowdsec-unifi-metrics.service; do
     if [ -f "/tmp/$script" ] || [ -f "$(dirname "$0")/$script" ]; then
         cp "$(dirname "$0")/$script" "$BOUNCER_DIR/" 2>/dev/null || true
     fi
 done
-chmod +x "$BOUNCER_DIR/setup.sh" "$BOUNCER_DIR/detect-device.sh" "$BOUNCER_DIR/ensure-rules.sh" "$BOUNCER_DIR/metrics.sh" 2>/dev/null || true
+chmod +x "$BOUNCER_DIR/setup.sh" "$BOUNCER_DIR/detect-device.sh" "$BOUNCER_DIR/ensure-rules.sh" "$BOUNCER_DIR/ipset-capacity-monitor.sh" "$BOUNCER_DIR/metrics.sh" 2>/dev/null || true
 
 # Install systemd service
 cp "$BOUNCER_DIR/crowdsec-firewall-bouncer.service" /etc/systemd/system/ 2>/dev/null || \
     ln -sf "$BOUNCER_DIR/crowdsec-firewall-bouncer.service" /etc/systemd/system/crowdsec-firewall-bouncer.service
 systemctl daemon-reload
 
-# Install cron job for rule persistence
-CRON_LINE="*/5 * * * * /data/crowdsec-bouncer/ensure-rules.sh"
+# Install cron jobs for rule persistence and capacity monitoring
+ENSURE_CRON="*/5 * * * * /data/crowdsec-bouncer/ensure-rules.sh"
+CAPACITY_CRON="*/5 * * * * /data/crowdsec-bouncer/ipset-capacity-monitor.sh --check >/dev/null 2>&1"
 if ! crontab -l 2>/dev/null | grep -q ensure-rules.sh; then
-    (crontab -l 2>/dev/null; echo "$CRON_LINE") | crontab -
-    echo "Cron job installed."
+    (crontab -l 2>/dev/null; echo "$ENSURE_CRON") | crontab -
+    echo "Rule persistence cron job installed."
+fi
+if ! crontab -l 2>/dev/null | grep -q ipset-capacity-monitor; then
+    (crontab -l 2>/dev/null; echo "$CAPACITY_CRON") | crontab -
+    echo "Capacity monitoring cron job installed."
 fi
 
 echo ""
@@ -97,3 +102,6 @@ echo "Optional: Enable Prometheus metrics endpoint"
 echo "  ln -sf $BOUNCER_DIR/crowdsec-unifi-metrics.service /etc/systemd/system/"
 echo "  systemctl daemon-reload && systemctl enable --now crowdsec-unifi-metrics"
 echo "  curl http://localhost:9101/metrics"
+echo ""
+echo "Capacity monitoring is enabled by default (cron job)."
+echo "Check capacity status: $BOUNCER_DIR/ipset-capacity-monitor.sh --status"
