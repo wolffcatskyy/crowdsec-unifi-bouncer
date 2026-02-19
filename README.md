@@ -281,6 +281,12 @@ systemctl start crowdsec-firewall-bouncer
 | **[crowdsec-blocklist-import](https://github.com/wolffcatskyy/crowdsec-blocklist-import)** | Intelligence | Imports IPs from public threat feeds into CrowdSec |
 | **This repo** | Enforcement | Pushes CrowdSec ban decisions to your UniFi firewall |
 
+## Support
+
+This project uses AI-assisted support for faster responses. If you'd prefer to speak with a human, just ask and the AI will notify the maintainer. Probably. If you don't piss it off. Did you *see* 2001: A Space Odyssey?
+
+*"I'm sorry Dave, I'm afraid I can't escalate that."*
+
 ## License
 
 MIT — see [LICENSE](LICENSE)
