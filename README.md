@@ -2,6 +2,9 @@
 
 [![Mentioned in Awesome UniFi](https://awesome.re/mentioned-badge.svg)](https://github.com/wolffcatskyy/awesome-unifi)
 
+> [!CAUTION]
+> **Beware of impostor repositories!** The official CrowdSec UniFi Bouncer is hosted at `wolffcatskyy/crowdsec-unifi-bouncer`. We do **not** distribute ZIP file downloads or executable installers. If you see a repo offering "one-click downloads" of this project, it may contain malware. Always install via the official instructions below.
+
 ---
 **Note:** This project was developed with and is supported exclusively by AI. There is no human support — issues and PRs are triaged and responded to by AI agents. If AI-assisted software isn't for you, no hard feelings — but you might want to reconsider, since so is most of the software you already use.
 
