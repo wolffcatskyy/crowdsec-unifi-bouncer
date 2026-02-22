@@ -294,8 +294,13 @@ This project uses AI-assisted support for faster responses. If you'd prefer to s
 
 MIT — see [LICENSE](LICENSE)
 
+## Community Guides
+
+- [CrowdSec + UniFi Installation Guide](https://www.trentbauer.com/guides/installation-guides/crowdsec/unifi) by Trent Bauer — walkthrough of setting up CrowdSec with UniFi devices
+
 ## Credits
 
 - [CrowdSec](https://crowdsec.net) — the open-source security engine
 - [crowdsecurity/cs-firewall-bouncer](https://github.com/crowdsecurity/cs-firewall-bouncer) — the official Go binary
 - [unifi-utilities/unifios-utilities](https://github.com/unifi-utilities/unifios-utilities) — community patterns for persisting custom services on UniFi OS
+- [Trent Bauer](https://www.trentbauer.com) — community guide and writeup
