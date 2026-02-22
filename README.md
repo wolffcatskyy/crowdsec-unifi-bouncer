@@ -294,9 +294,9 @@ This project uses AI-assisted support for faster responses. If you'd prefer to s
 
 MIT — see [LICENSE](LICENSE)
 
-## Community Guides
+## Featured In
 
-- [CrowdSec + UniFi Installation Guide](https://www.trentbauer.com/guides/installation-guides/crowdsec/unifi) by Trent Bauer — walkthrough of setting up CrowdSec with UniFi devices
+- [CrowdSec + UniFi Installation Guide](https://www.trentbauer.com/guides/installation-guides/crowdsec/unifi) by Trent Bauer
 
 ## Credits
 
