@@ -1,0 +1,53 @@
+# CrowdSec LAPI Sidecar Proxy
+#
+# This compose file is for reference. Typically you'd add the sidecar service
+# to your existing CrowdSec compose file.
+#
+# Usage:
+#   docker compose up -d
+#
+# The bouncer should connect to the sidecar (port 8084) instead of LAPI directly.
+
+services:
+  crowdsec-sidecar:
+    build:
+      context: .
+      args:
+        VERSION: ${VERSION:-dev}
+        BUILD_TIME: ${BUILD_TIME:-unknown}
+    image: crowdsec-sidecar:latest
+    container_name: crowdsec-sidecar
+    restart: unless-stopped
+    networks:
+      - crowdsec_network
+    ports:
+      - "8084:8084"
+    volumes:
+      - ./config.yaml:/etc/crowdsec-sidecar/config.yaml:ro
+    environment:
+      - TZ=America/Los_Angeles
+    depends_on:
+      - crowdsec
+    healthcheck:
+      test: ["CMD", "wget", "-q", "--spider", "http://localhost:8084/health"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+      start_period: 5s
+
+  # Reference: This is what your CrowdSec service might look like
+  # crowdsec:
+  #   image: crowdsecurity/crowdsec:latest
+  #   container_name: crowdsec
+  #   restart: unless-stopped
+  #   networks:
+  #     - crowdsec_network
+  #   ports:
+  #     - "8080:8080"  # LAPI (internal, sidecar connects here)
+  #   volumes:
+  #     - ./config:/etc/crowdsec
+  #     - ./data:/var/lib/crowdsec/data
+
+networks:
+  crowdsec_network:
+    external: true
