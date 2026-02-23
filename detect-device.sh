@@ -104,3 +104,4 @@ DETECTED_MODEL=$(detect_device_model)
 SAFE_MAXELEM=$(get_safe_maxelem "$DETECTED_MODEL")
 # Recommended sidecar max_decisions: leave 2000 entries headroom for manual bans
 RECOMMENDED_SIDECAR_CAP=$((SAFE_MAXELEM - 2000))
+export RECOMMENDED_SIDECAR_CAP
