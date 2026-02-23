@@ -70,7 +70,9 @@ fi
 
 # Export variables when sourced
 SIDECAR_MODE=$(detect_sidecar_mode)
+export SIDECAR_MODE
 BOUNCER_UPSTREAM=""
 if [ -f "$BOUNCER_CONFIG" ]; then
     BOUNCER_UPSTREAM=$(grep -E "^api_url:" "$BOUNCER_CONFIG" 2>/dev/null | awk '{print $2}' | tr -d '"' | tr -d "'")
 fi
+export BOUNCER_UPSTREAM
