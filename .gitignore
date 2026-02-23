@@ -1,2 +1,6 @@
 crowdsec-firewall-bouncer.yaml
 *.log
+sidecar/bin/
+sidecar/dist/
+sidecar/config.yaml
+sidecar/coverage.*

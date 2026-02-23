@@ -4,19 +4,16 @@ Development direction for crowdsec-unifi-bouncer.
 
 ## Current Version
 
-**v2.0.0** (February 2026)
+**v2.1.0** (February 2026) -- Sidecar Release
 
-Native ipset/iptables implementation replacing the Python/Docker API approach:
-- Official CrowdSec firewall bouncer binary (Go)
-- ipset-based blocking — no MongoDB thrashing
-- Firmware update persistence
-- Controller reprovisioning recovery
-- Memory guardrail protection
-- Prometheus metrics
-- Device auto-detection
-- One-line installer
+Intelligent sidecar proxy for decision prioritization:
+- Sidecar proxy that sits between CrowdSec LAPI and the bouncer to prioritize decisions
+- 7-factor scoring algorithm: scenario multiplier, origin, TTL, decision type, freshness, CIDR size, recidivism
+- Sidecar-aware shell scripts (detect-sidecar.sh, improved capacity recommendations)
+- Updated bouncer config template with sidecar option
+- Production tested: 2 instances, 20,000+ requests, 0 failures
 
-## Next Release: v2.1.0
+## Next Release: v2.2.0
 
 ### IPv6 Support
 - Test ip6tables rules across device models
@@ -32,7 +29,7 @@ Native ipset/iptables implementation replacing the Python/Docker API approach:
 ## Future Releases
 
 ### UniFi Gateway Max Support
-- New device (12GB RAM) — add to detect-device.sh when available
+- New device (12GB RAM) -- add to detect-device.sh when available
 
 ### nftables Migration
 - Modern UniFi OS versions may support nftables
@@ -47,11 +44,25 @@ Native ipset/iptables implementation replacing the Python/Docker API approach:
 - Connect to multiple CrowdSec LAPI instances
 - Aggregate decisions from different sources
 
+## Previous Version
+
+**v2.0.0** (February 2026)
+
+Native ipset/iptables implementation replacing the Python/Docker API approach:
+- Official CrowdSec firewall bouncer binary (Go)
+- ipset-based blocking -- no MongoDB thrashing
+- Firmware update persistence
+- Controller reprovisioning recovery
+- Memory guardrail protection
+- Prometheus metrics
+- Device auto-detection
+- One-line installer
+
 ## Known Limitations
 
 | Limitation | Reason | Workaround |
 |------------|--------|------------|
-| Device capacity limits | Hardware constraint | Use CrowdSec Console to filter blocklists |
+| Device capacity limits | Hardware constraint | Deploy sidecar proxy to prioritize which decisions fit |
 | No GUI integration | UniFi API doesn't support custom rules | Monitor via Prometheus/Grafana |
 | ARM64 binary only | UniFi devices are ARM64 | N/A |
 | No official Ubiquiti support | Unofficial modification | Everything in /data/ persists |
@@ -69,5 +80,6 @@ Advanced users can increase `ipset_size` in config. Monitor for UI slowness or p
 
 ## Related Projects
 
-- [crowdsec-unifi-parser](https://github.com/wolffcatskyy/crowdsec-unifi-parser) — Detect threats from UniFi firewall logs
-- [crowdsec-blocklist-import](https://github.com/wolffcatskyy/crowdsec-blocklist-import) — Import public threat feeds into CrowdSec
+- [crowdsec-unifi-bouncer-sidecar](sidecar/) -- Intelligent proxy for decision prioritization on capacity-limited devices
+- [crowdsec-unifi-parser](https://github.com/wolffcatskyy/crowdsec-unifi-parser) -- Detect threats from UniFi firewall logs
+- [crowdsec-blocklist-import](https://github.com/wolffcatskyy/crowdsec-blocklist-import) -- Import public threat feeds into CrowdSec

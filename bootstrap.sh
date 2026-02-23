@@ -66,6 +66,7 @@ FILES=(
     "install.sh"
     "setup.sh"
     "detect-device.sh"
+    "detect-sidecar.sh"
     "ensure-rules.sh"
     "ipset-capacity-monitor.sh"
     "metrics.sh"
@@ -89,6 +90,7 @@ done
 chmod +x "$BOUNCER_DIR/install.sh" \
          "$BOUNCER_DIR/setup.sh" \
          "$BOUNCER_DIR/detect-device.sh" \
+         "$BOUNCER_DIR/detect-sidecar.sh" \
          "$BOUNCER_DIR/ensure-rules.sh" \
          "$BOUNCER_DIR/ipset-capacity-monitor.sh" \
          "$BOUNCER_DIR/metrics.sh"

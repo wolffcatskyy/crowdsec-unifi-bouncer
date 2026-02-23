@@ -1,0 +1,111 @@
+# CrowdSec LAPI Sidecar Proxy Configuration
+#
+# This proxy sits between your firewall bouncer and CrowdSec LAPI,
+# filtering and prioritizing decisions to stay within ipset capacity.
+
+# Address to listen on (use 0.0.0.0 for Docker)
+listen_addr: "0.0.0.0:8084"
+
+# Upstream CrowdSec LAPI URL
+upstream_lapi_url: "http://127.0.0.1:8080"
+
+# Bouncer API key (same key you'd use with the bouncer)
+upstream_lapi_key: "YOUR_BOUNCER_KEY"
+
+# Maximum number of decisions to return to bouncer
+# Set below your ipset maxelem to leave headroom for manual entries
+# Example: device maxelem=20000, set max_decisions=18000
+max_decisions: 18000
+
+# How long to cache LAPI responses
+# Reduces load on LAPI while ensuring bouncer gets fresh-enough data
+cache_ttl: 60s
+
+# Log level: debug, info, warn, error
+log_level: "info"
+
+# Scoring configuration
+# Higher scores = higher priority (kept when truncating)
+# Total score = (scenario * multiplier) + origin + TTL + decision_type + freshness + CIDR + recidivism
+scoring:
+  # Scenario multiplier (applied to all scenario base scores)
+  # Default: 2.0 — makes scenario the dominant scoring factor
+  scenario_multiplier: 2.0
+
+  # Score by scenario name (pattern matching supported)
+  # These base scores are multiplied by scenario_multiplier
+  scenarios:
+    # SSH attacks - highest priority
+    ssh-bf: 50
+    ssh-slow-bf: 50
+    ssh-cve-2024-6387: 60
+
+    # Critical web attacks
+    http-cve-.*: 55
+    http-sqli: 50
+    http-xss: 45
+    http-path-traversal: 45
+
+    # Probing and scanning
+    http-probing: 30
+    http-crawl-non_statics: 25
+    http-bad-user-agent: 20
+    http-sensitive-files: 35
+
+    # Generic/default
+    default: 10
+
+  # Score by decision origin
+  # Local detections are more relevant than community blocklist data
+  origins:
+    crowdsec: 25   # Local CrowdSec detections (YOUR network saw this)
+    cscli: 20      # Manual bans via cscli (explicit admin action)
+    CAPI: 10       # Community blocklist (crowd-sourced, less targeted)
+
+  # Score by decision type
+  decision_types:
+    ban: 5         # Full block — highest priority
+    captcha: 0     # Challenge only
+
+  # TTL scoring: bonus points based on remaining ban time
+  # Longer bans often indicate more serious threats
+  ttl_scoring:
+    enabled: true
+    max_bonus: 10          # Max bonus points for TTL
+    max_ttl: "168h"        # TTL threshold for max bonus (7 days)
+
+  # Freshness bonuses: recently created decisions score higher
+  # Helps prioritize active threats over stale blocklist entries
+  freshness_bonuses:
+    - max_age: "1h"        # Created in the last hour
+      bonus: 15
+    - max_age: "24h"       # Created in the last day
+      bonus: 10
+    - max_age: "168h"      # Created in the last week
+      bonus: 5
+
+  # CIDR bonuses: broader ranges block more addresses, score higher
+  cidr_bonuses:
+    - min_prefix: 0        # /0 to /16 (large ranges)
+      max_prefix: 16
+      bonus: 20
+    - min_prefix: 17       # /17 to /24 (medium ranges)
+      max_prefix: 24
+      bonus: 10
+    - min_prefix: 25       # /25 to /32 (single IPs)
+      max_prefix: 32
+      bonus: 0
+
+  # Recidivism bonus: extra points per additional decision for the same IP
+  # If an IP has 3 decisions, each gets +30 (15 * 2)
+  recidivism_bonus: 15
+
+# Health check endpoint
+health:
+  enabled: true
+  path: "/health"
+
+# Metrics endpoint (Prometheus format)
+metrics:
+  enabled: true
+  path: "/metrics"
