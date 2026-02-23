@@ -19,6 +19,7 @@ jobs:
         with:
           scandir: '.'
           severity: warning
+          ignore: sidecar
 
   yaml-lint:
     name: YAML Lint
@@ -49,7 +50,7 @@ jobs:
         run: |
           # Find files with CRLF line endings
           CRLF_FILES=$(find . -type f \( -name "*.sh" -o -name "*.yaml" -o -name "*.yml" \
-            -o -name "*.md" \) -exec grep -l $'\r' {} \; 2>/dev/null || true)
+            -o -name "*.md" -o -name "*.go" \) -exec grep -l $'\r' {} \; 2>/dev/null || true)
 
           if [ -n "$CRLF_FILES" ]; then
             echo "::error::The following files have CRLF line endings:"
@@ -58,3 +59,27 @@ jobs:
           fi
 
           echo "All files have Unix (LF) line endings."
+
+  go-test:
+    name: Go Test (Sidecar)
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: sidecar
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Set up Go
+        uses: actions/setup-go@v5
+        with:
+          go-version: '1.21'
+
+      - name: Download dependencies
+        run: go mod download
+
+      - name: Run tests
+        run: go test -race -v ./...
+
+      - name: Build binary
+        run: go build -o /dev/null ./cmd/sidecar

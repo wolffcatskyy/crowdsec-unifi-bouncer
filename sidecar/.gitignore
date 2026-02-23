@@ -1,0 +1,30 @@
+# Binaries
+bin/
+*.exe
+*.exe~
+*.dll
+*.so
+*.dylib
+crowdsec-sidecar
+crowdsec-sidecar-*
+
+# Test coverage
+coverage.out
+coverage.html
+
+# Distribution
+dist/
+
+# Config with secrets
+config.yaml
+
+# IDE
+.idea/
+.vscode/
+*.swp
+*.swo
+*~
+
+# OS
+.DS_Store
+Thumbs.db

@@ -24,6 +24,22 @@ fi
 echo "Device: ${DETECTED_MODEL:-Unknown}"
 echo "Maxelem: $MAXELEM"
 
+# Detect sidecar configuration
+if [ -f "$SCRIPT_DIR/detect-sidecar.sh" ]; then
+    source "$SCRIPT_DIR/detect-sidecar.sh"
+elif [ -f "$BOUNCER_DIR/detect-sidecar.sh" ]; then
+    source "$BOUNCER_DIR/detect-sidecar.sh"
+fi
+
+if [ -n "$SIDECAR_MODE" ]; then
+    echo "Upstream: $SIDECAR_MODE"
+    if [ "$SIDECAR_MODE" = "lapi" ]; then
+        echo "WARNING: Bouncer connects directly to LAPI. If your LAPI has more decisions"
+        echo "  than maxelem ($MAXELEM), excess decisions will be silently dropped."
+        echo "  Consider deploying the sidecar proxy — see README.md."
+    fi
+fi
+
 # Ensure ipset kernel modules are loaded
 modprobe ip_set 2>/dev/null || true
 modprobe ip_set_hash_net 2>/dev/null || true

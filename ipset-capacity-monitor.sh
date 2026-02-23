@@ -268,19 +268,53 @@ show_status() {
     echo "  Last event:       $last_event_str"
     echo ""
 
+    # Sidecar detection
+    local sidecar_mode=""
+    if [ -f "$BOUNCER_DIR/detect-sidecar.sh" ]; then
+        source "$BOUNCER_DIR/detect-sidecar.sh"
+        sidecar_mode="$SIDECAR_MODE"
+    fi
+
+    echo "Upstream Configuration:"
+    if [ "$sidecar_mode" = "sidecar" ]; then
+        echo "  Mode:        sidecar proxy (port ${SIDECAR_PORT:-8084})"
+        echo "  api_url:     ${BOUNCER_UPSTREAM:-unknown}"
+        echo "  Status:      Decisions are filtered and prioritized before reaching this device"
+    elif [ "$sidecar_mode" = "lapi" ]; then
+        echo "  Mode:        direct LAPI connection"
+        echo "  api_url:     ${BOUNCER_UPSTREAM:-unknown}"
+        echo "  Note:        LAPI sends ALL decisions — if more than maxelem, excess are silently dropped"
+    else
+        echo "  Mode:        unknown (could not parse bouncer config)"
+    fi
+    echo ""
+
     # Status assessment
     local fill_int
     fill_int=$(awk "BEGIN {printf \"%.0f\", $fill_ratio}")
 
     if [ "$fill_int" -ge 95 ]; then
         echo "Status: CRITICAL - Decisions are being dropped!"
-        echo "Action: Reduce ipset_size in config or increase MAXELEM"
+        if [ "$sidecar_mode" = "sidecar" ]; then
+            echo "Action: Reduce max_decisions in sidecar config (currently set too high for this device)"
+            echo "  Recommended: $((maxelem - 2000)) or less"
+        else
+            echo "Action: Deploy the sidecar proxy to filter and prioritize decisions"
+            echo "  See: https://github.com/wolffcatskyy/crowdsec-unifi-bouncer#sidecar-proxy"
+            echo "  Recommended sidecar max_decisions: $((maxelem - 2000))"
+        fi
     elif [ "$fill_int" -ge 90 ]; then
         echo "Status: WARNING - Approaching capacity limit"
-        echo "Action: Monitor closely, consider reducing blocklist size"
+        if [ "$sidecar_mode" = "sidecar" ]; then
+            echo "Action: Consider reducing sidecar max_decisions"
+        else
+            echo "Action: Monitor closely, consider deploying the sidecar proxy"
+        fi
     elif [ "$fill_int" -ge 80 ]; then
         echo "Status: ELEVATED - Getting full"
-        echo "Action: Plan for capacity increase or blocklist reduction"
+        if [ "$sidecar_mode" != "sidecar" ]; then
+            echo "Action: Consider deploying the sidecar proxy for decision prioritization"
+        fi
     else
         echo "Status: OK"
     fi

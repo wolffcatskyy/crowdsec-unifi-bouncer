@@ -7,8 +7,19 @@ log_compression: true
 log_max_size: 100
 log_max_backups: 3
 log_max_age: 30
-api_url: http://YOUR_CROWDSEC_LAPI:8081/
+
+# --- Upstream Configuration ---
+# Option 1: Direct LAPI connection (simple, but LAPI sends ALL decisions)
+#   If LAPI has more decisions than your ipset maxelem, excess are silently dropped.
+api_url: http://YOUR_CROWDSEC_LAPI:8080/
 api_key: YOUR_BOUNCER_API_KEY
+
+# Option 2: Sidecar proxy (recommended when LAPI decisions > device capacity)
+#   The sidecar scores, prioritizes, and caps decisions to fit your device.
+#   Deploy the sidecar first (see sidecar/), then point the bouncer at it:
+# api_url: http://YOUR_SIDECAR_HOST:8084/
+# api_key: YOUR_BOUNCER_API_KEY
+
 insecure_skip_verify: false
 disable_ipv6: true
 deny_action: DROP
