@@ -10,6 +10,12 @@ BOUNCER_DIR="/data/crowdsec-bouncer"
 LOGFILE="$BOUNCER_DIR/log/memory.log"
 METRICS_SCRIPT="$BOUNCER_DIR/metrics.sh"
 
+# Detect sidecar mode for capacity recommendations
+SIDECAR_MODE=""
+if [ -f "$BOUNCER_DIR/detect-sidecar.sh" ]; then
+    source "$BOUNCER_DIR/detect-sidecar.sh"
+fi
+
 # Memory threshold in kB — stop bouncer if MemAvailable drops below this.
 # 200MB default. Override with MEM_THRESHOLD env var.
 MEM_THRESHOLD="${MEM_THRESHOLD:-200000}"
@@ -50,7 +56,11 @@ if [ "$IPSET_MAXELEM" -gt 0 ]; then
     if [ "$CAPACITY_USED" -ge "$CAPACITY_THRESHOLD" ]; then
         # At capacity - decisions are being dropped
         echo "$(date '+%F %T') CAPACITY: ipset at ${CAPACITY_USED}% ($IPSET_COUNT/$IPSET_MAXELEM) - decisions may be dropped" >> "$LOGFILE"
-        logger -t crowdsec-bouncer "CAPACITY WARNING: ipset at ${CAPACITY_USED}% ($IPSET_COUNT/$IPSET_MAXELEM) - increase maxelem or filter blocklists"
+        if [ "$SIDECAR_MODE" = "sidecar" ]; then
+            logger -t crowdsec-bouncer "CAPACITY WARNING: ipset at ${CAPACITY_USED}% ($IPSET_COUNT/$IPSET_MAXELEM) - reduce sidecar max_decisions setting"
+        else
+            logger -t crowdsec-bouncer "CAPACITY WARNING: ipset at ${CAPACITY_USED}% ($IPSET_COUNT/$IPSET_MAXELEM) - deploy sidecar proxy to prioritize decisions"
+        fi
     elif [ "$CAPACITY_USED" -ge 80 ]; then
         # Approaching capacity - warn
         echo "$(date '+%F %T') CAPACITY: ipset at ${CAPACITY_USED}% ($IPSET_COUNT/$IPSET_MAXELEM) - approaching limit" >> "$LOGFILE"

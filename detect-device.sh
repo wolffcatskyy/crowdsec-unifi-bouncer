@@ -92,6 +92,7 @@ if [[ "${BASH_SOURCE[0]}" == "${0}" ]]; then
     echo "Device: ${DETECTED_MODEL:-Unknown}"
     echo "RAM: ${TOTAL_MEM}MB"
     echo "Default maxelem: $SAFE_MAXELEM"
+    echo "Recommended sidecar max_decisions: $((SAFE_MAXELEM - 2000))"
 
     if [ -n "$MAXELEM" ]; then
         echo "Configured maxelem: $MAXELEM"
@@ -101,3 +102,5 @@ fi
 # Export variables when sourced
 DETECTED_MODEL=$(detect_device_model)
 SAFE_MAXELEM=$(get_safe_maxelem "$DETECTED_MODEL")
+# Recommended sidecar max_decisions: leave 2000 entries headroom for manual bans
+RECOMMENDED_SIDECAR_CAP=$((SAFE_MAXELEM - 2000))
