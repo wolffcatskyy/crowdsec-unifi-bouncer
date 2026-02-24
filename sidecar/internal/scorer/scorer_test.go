@@ -183,11 +183,11 @@ func TestScorer_ScoreAndTruncateWithStats(t *testing.T) {
 	s := New(cfg)
 
 	decisions := []lapi.Decision{
-		{ID: 1, Scenario: "default", Scope: "ip"},
-		{ID: 2, Scenario: "ssh-bf", Scope: "ip"},
-		{ID: 3, Scenario: "default", Scope: "ip"},
-		{ID: 4, Scenario: "ssh-bf", Scope: "ip"},
-		{ID: 5, Scenario: "default", Scope: "ip"},
+		{ID: 1, Scenario: "default", Scope: "ip", Value: "1.1.1.1"},
+		{ID: 2, Scenario: "ssh-bf", Scope: "ip", Value: "2.2.2.2"},
+		{ID: 3, Scenario: "default", Scope: "ip", Value: "3.3.3.3"},
+		{ID: 4, Scenario: "ssh-bf", Scope: "ip", Value: "4.4.4.4"},
+		{ID: 5, Scenario: "default", Scope: "ip", Value: "5.5.5.5"},
 	}
 
 	truncated, stats := s.ScoreAndTruncateWithStats(decisions, 3)
@@ -212,6 +212,169 @@ func TestScorer_ScoreAndTruncateWithStats(t *testing.T) {
 
 	if len(truncated) != 3 {
 		t.Errorf("Expected 3 decisions, got %d", len(truncated))
+	}
+}
+
+func TestScorer_ScoreAndTruncateWithStats_EffectivenessMetrics(t *testing.T) {
+	cfg := &config.ScoringConfig{
+		Scenarios: map[string]int{
+			"ssh-bf":       50,
+			"http-probing": 30,
+			"default":      10,
+		},
+		Origins: map[string]int{
+			"crowdsec": 25,
+			"CAPI":     10,
+		},
+		ScenarioMultiplier: 2.0,
+		RecidivismBonus:    15,
+		TTLScoring:         config.TTLScoringConfig{Enabled: false},
+		DecisionTypes: map[string]int{
+			"ban": 5,
+		},
+	}
+
+	s := New(cfg)
+
+	decisions := []lapi.Decision{
+		{ID: 1, Scenario: "ssh-bf", Origin: "crowdsec", Type: "ban", Scope: "ip", Value: "1.1.1.1"},     // score: 100+25+5 = 130
+		{ID: 2, Scenario: "ssh-bf", Origin: "CAPI", Type: "ban", Scope: "ip", Value: "2.2.2.2"},         // score: 100+10+5 = 115
+		{ID: 3, Scenario: "http-probing", Origin: "CAPI", Type: "ban", Scope: "ip", Value: "3.3.3.3"},   // score: 60+10+5 = 75
+		{ID: 4, Scenario: "default", Origin: "CAPI", Type: "ban", Scope: "ip", Value: "4.4.4.4"},        // score: 20+10+5 = 35
+		{ID: 5, Scenario: "default", Origin: "CAPI", Type: "ban", Scope: "ip", Value: "5.5.5.5"},        // score: 20+10+5 = 35
+		{ID: 6, Scenario: "default", Origin: "CAPI", Type: "ban", Scope: "ip", Value: "2.2.2.2"},        // score: 20+10+5+15 = 50 (recidivism for 2.2.2.2)
+	}
+
+	// max 4 → keeps top 4, drops 2
+	truncated, stats := s.ScoreAndTruncateWithStats(decisions, 4)
+
+	// Basic counts
+	if stats.TotalDecisions != 6 {
+		t.Errorf("TotalDecisions = %d, want 6", stats.TotalDecisions)
+	}
+	if stats.ReturnedDecisions != 4 {
+		t.Errorf("ReturnedDecisions = %d, want 4", stats.ReturnedDecisions)
+	}
+	if stats.DroppedDecisions != 2 {
+		t.Errorf("DroppedDecisions = %d, want 2", stats.DroppedDecisions)
+	}
+	if len(truncated) != 4 {
+		t.Errorf("Expected 4 decisions, got %d", len(truncated))
+	}
+
+	// Origin kept: crowdsec should be 100% preserved
+	if stats.OriginKept["crowdsec"] != 1 {
+		t.Errorf("OriginKept[crowdsec] = %d, want 1", stats.OriginKept["crowdsec"])
+	}
+	if stats.OriginDropped["crowdsec"] != 0 {
+		t.Errorf("OriginDropped[crowdsec] = %d, want 0", stats.OriginDropped["crowdsec"])
+	}
+
+	// Score cutoff: should be the lowest score of kept decisions
+	if stats.ScoreCutoff <= 0 {
+		t.Errorf("ScoreCutoff = %d, should be > 0", stats.ScoreCutoff)
+	}
+
+	// Median should be reasonable (between min and max)
+	if stats.MedianScore < stats.MinScore || stats.MedianScore > stats.MaxScore {
+		t.Errorf("MedianScore = %d, should be between %d and %d", stats.MedianScore, stats.MinScore, stats.MaxScore)
+	}
+
+	// Score buckets should be populated
+	if len(stats.ScoreBuckets) == 0 {
+		t.Error("ScoreBuckets should not be empty")
+	}
+	// le=200 should equal TotalDecisions (all scores <= 200)
+	if stats.ScoreBuckets[200] != stats.TotalDecisions {
+		t.Errorf("ScoreBuckets[200] = %d, want %d (all decisions)", stats.ScoreBuckets[200], stats.TotalDecisions)
+	}
+	// Buckets should be monotonically increasing
+	prev := 0
+	for _, threshold := range ScoreBucketThresholds {
+		count := stats.ScoreBuckets[threshold]
+		if count < prev {
+			t.Errorf("ScoreBuckets[%d] = %d < previous %d (not monotonically increasing)", threshold, count, prev)
+		}
+		prev = count
+	}
+
+	// Recidivism: IP 2.2.2.2 appears twice → 1 recidivism IP
+	if stats.RecidivismIPs != 1 {
+		t.Errorf("RecidivismIPs = %d, want 1", stats.RecidivismIPs)
+	}
+	// Recidivism boosts: IP 2.2.2.2 count=2, bonus=15, total = 15*(2-1)*2 = 30
+	if stats.RecidivismBoosts != 30 {
+		t.Errorf("RecidivismBoosts = %d, want 30", stats.RecidivismBoosts)
+	}
+
+	// Dropped IPs should contain the 2 dropped IPs
+	if len(stats.DroppedIPs) != 2 {
+		t.Errorf("DroppedIPs count = %d, want 2", len(stats.DroppedIPs))
+	}
+
+	// Scenario kept/dropped should be populated
+	if len(stats.ScenarioKept) == 0 {
+		t.Error("ScenarioKept should not be empty")
+	}
+}
+
+func TestScorer_ScoreAndTruncateWithStats_NoTruncation(t *testing.T) {
+	cfg := &config.ScoringConfig{
+		Scenarios: map[string]int{
+			"ssh-bf": 50,
+		},
+		Origins:            map[string]int{},
+		ScenarioMultiplier: 2.0,
+		TTLScoring:         config.TTLScoringConfig{Enabled: false},
+	}
+
+	s := New(cfg)
+
+	decisions := []lapi.Decision{
+		{ID: 1, Scenario: "ssh-bf", Scope: "ip", Value: "1.1.1.1"},
+		{ID: 2, Scenario: "ssh-bf", Scope: "ip", Value: "2.2.2.2"},
+	}
+
+	result, stats := s.ScoreAndTruncateWithStats(decisions, 100)
+
+	if stats.ReturnedDecisions != 2 {
+		t.Errorf("ReturnedDecisions = %d, want 2", stats.ReturnedDecisions)
+	}
+	if stats.DroppedDecisions != 0 {
+		t.Errorf("DroppedDecisions = %d, want 0", stats.DroppedDecisions)
+	}
+	if len(stats.DroppedIPs) != 0 {
+		t.Errorf("DroppedIPs = %d, want 0", len(stats.DroppedIPs))
+	}
+	if len(stats.OriginDropped) != 0 {
+		t.Errorf("OriginDropped should be empty, got %v", stats.OriginDropped)
+	}
+	// ScoreCutoff should be the lowest score (all kept)
+	if stats.ScoreCutoff != 100 {
+		t.Errorf("ScoreCutoff = %d, want 100", stats.ScoreCutoff)
+	}
+	if len(result) != 2 {
+		t.Errorf("Expected 2 results, got %d", len(result))
+	}
+}
+
+func TestScorer_ScoreAndTruncateWithStats_EmptyDecisions(t *testing.T) {
+	cfg := &config.ScoringConfig{
+		Scenarios:          map[string]int{"default": 10},
+		Origins:            map[string]int{},
+		ScenarioMultiplier: 2.0,
+		TTLScoring:         config.TTLScoringConfig{Enabled: false},
+	}
+
+	s := New(cfg)
+
+	result, stats := s.ScoreAndTruncateWithStats([]lapi.Decision{}, 100)
+
+	if stats.TotalDecisions != 0 {
+		t.Errorf("TotalDecisions = %d, want 0", stats.TotalDecisions)
+	}
+	if len(result) != 0 {
+		t.Errorf("Expected 0 results, got %d", len(result))
 	}
 }
 
