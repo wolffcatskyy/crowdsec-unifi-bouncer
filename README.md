@@ -257,6 +257,20 @@ Every decision is scored across 7 factors. Higher score = higher priority = kept
 | CIDR | 0-20 | Broader ranges block more. /16: +20. /24: +10. /32: +0. |
 | Recidivism | 0-N | +15 per additional decision for the same IP. 3 bans for one IP = +30 each. Repeat offenders rise to the top. |
 
+### What Survives Truncation
+
+The scoring system ensures your highest-value detections are never dropped. In production with 125K LAPI decisions filtered to 38K:
+
+| Source | Kept | Why |
+|--------|------|-----|
+| Your local CrowdSec detections | **100%** | Origin score 25 + freshness bonus = always survives |
+| Manual bans (`cscli`) | **100%** | Origin score 20 = always survives |
+| Community curated lists | **100%** | Higher signal than bulk imports |
+| Community blocklist (CAPI) | **100%** | Scored above bulk feeds |
+| Bulk blocklist-import feeds | **13%** | Absorbs all drops — stale single-source IPs shed first |
+
+Only low-signal bulk imports are dropped — and even within those, IPs that appear in multiple sources get a recidivism bonus and survive.
+
 ### Quick Setup
 
 1. Deploy the sidecar on your CrowdSec host (or any machine that can reach LAPI):

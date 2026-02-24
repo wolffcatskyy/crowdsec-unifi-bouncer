@@ -70,6 +70,20 @@ total = (scenario_base * scenario_multiplier)
 | 6 | **CIDR bonus** | 0-20 pts | /0-/16 (large ranges): 20 pts. /17-/24 (medium ranges): 10 pts. /25-/32 (single IPs): 0 pts. Broader ranges block more addresses per ipset entry. |
 | 7 | **Recidivism bonus** | 15 pts per extra decision | If an IP has N decisions, each gets +15*(N-1). An IP with 3 decisions gets +30 per decision. Repeat offenders are promoted to survive truncation. |
 
+### What Survives, What Gets Dropped
+
+In production with 125,000 LAPI decisions filtered to 38,000 (UDR cap):
+
+| Origin | LAPI Total | Kept | Kept % | Verdict |
+|--------|-----------|------|--------|---------|
+| `crowdsec` (local detections) | 268 | 268 | **100%** | All preserved — YOUR network detected these |
+| `cscli` (manual bans) | 1 | 1 | **100%** | All preserved — explicit admin action |
+| `lists` (curated community) | 14,603 | 14,603 | **100%** | All preserved — community-curated, high signal |
+| `CAPI` (community blocklist) | 10,239 | 10,239 | **100%** | All preserved — scored above bulk imports |
+| `blocklist-import` (bulk feeds) | 100,210 | 12,889 | **13%** | Bulk feeds absorb all drops |
+
+**The scoring guarantee:** local detections, manual bans, and community intel are always prioritized. Only low-signal bulk blocklist imports are shed — and even within those, IPs that overlap with other sources (recidivism bonus) survive.
+
 ### Scoring Examples
 
 | Scenario | Origin | TTL | Type | Age | Scope | Recidivism | Total |
