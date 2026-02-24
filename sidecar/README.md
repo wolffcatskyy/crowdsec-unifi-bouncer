@@ -208,6 +208,24 @@ metrics:
 | `metrics.enabled` | bool | `true` | Enable the Prometheus metrics endpoint. |
 | `metrics.path` | string | `/metrics` | Path for the metrics endpoint. |
 
+### Effectiveness Section (v2.2.0)
+
+```yaml
+effectiveness:
+  top_scenarios: 20
+  false_negative_check:
+    enabled: true
+    interval: 5m
+    lookback: 15m
+```
+
+| Field | Type | Default | Description |
+|-------|------|---------|-------------|
+| `effectiveness.top_scenarios` | int | `20` | Number of top scenarios shown individually in metrics. Rest aggregated as "other". |
+| `effectiveness.false_negative_check.enabled` | bool | `true` | Enable background false-negative detection. |
+| `effectiveness.false_negative_check.interval` | duration | `5m` | How often to check for false negatives. |
+| `effectiveness.false_negative_check.lookback` | duration | `15m` | How far back to look for local alerts that match dropped IPs. |
+
 ---
 
 ## Endpoints
@@ -367,6 +385,8 @@ make install  # copies to /usr/local/bin (requires sudo)
 
 All metrics are exposed at the `/metrics` endpoint in Prometheus text format.
 
+### Operational Metrics
+
 | Metric | Type | Description |
 |--------|------|-------------|
 | `crowdsec_sidecar_requests_total` | counter | Total number of requests received by the sidecar (all endpoints). |
@@ -379,6 +399,23 @@ All metrics are exposed at the `/metrics` endpoint in Prometheus text format.
 | `crowdsec_sidecar_decisions_total` | gauge | Total number of decisions received from upstream LAPI (before filtering). |
 | `crowdsec_sidecar_decisions_dropped` | gauge | Number of decisions dropped due to the `max_decisions` limit. |
 | `crowdsec_sidecar_uptime_seconds` | gauge | Time in seconds since the sidecar process started. |
+
+### Effectiveness Metrics (v2.2.0)
+
+| Metric | Type | Labels | Description |
+|--------|------|--------|-------------|
+| `crowdsec_sidecar_decisions_kept` | gauge | `origin` | Decisions kept per origin (e.g., `crowdsec`, `CAPI`, `blocklist-import`). |
+| `crowdsec_sidecar_decisions_dropped_by_origin` | gauge | `origin` | Decisions dropped per origin. |
+| `crowdsec_sidecar_scenario_kept` | gauge | `scenario` | Decisions kept per scenario (top N, rest as "other"). |
+| `crowdsec_sidecar_scenario_dropped` | gauge | `scenario` | Decisions dropped per scenario (top N, rest as "other"). |
+| `crowdsec_sidecar_score_cutoff` | gauge | | Lowest score that survived truncation. |
+| `crowdsec_sidecar_score_max` | gauge | | Highest decision score. |
+| `crowdsec_sidecar_score_median` | gauge | | Median decision score across all decisions. |
+| `crowdsec_sidecar_score_bucket` | gauge | `le` | Cumulative score distribution. Thresholds: 25, 50, 75, 100, 150, 200. |
+| `crowdsec_sidecar_recidivism_ips` | gauge | | Unique IPs that received a recidivism bonus. |
+| `crowdsec_sidecar_recidivism_boosts` | gauge | | Total recidivism bonus points applied across all decisions. |
+| `crowdsec_sidecar_false_negatives_total` | counter | | IPs that were dropped by scoring but later attacked locally. Should always be 0. |
+| `crowdsec_sidecar_false_negative_check_time` | gauge | | Unix timestamp of the last false-negative check. |
 
 ### Example Prometheus Scrape Config
 
@@ -450,10 +487,12 @@ sidecar/
   internal/
     config/config.go            # YAML config loading, validation, defaults
     config/config_test.go       # Config loading and scoring config tests
-    lapi/client.go              # HTTP client for CrowdSec LAPI
-    proxy/handler.go            # HTTP handler, routing, caching, metrics
-    scorer/scorer.go            # Decision scoring and sorting logic
-    scorer/scorer_test.go       # Scoring algorithm tests
+    lapi/client.go              # HTTP client for CrowdSec LAPI (decisions + alerts)
+    lapi/client_test.go         # LAPI client tests (alert fetching)
+    proxy/handler.go            # HTTP handler, routing, caching, metrics, false-negative detection
+    proxy/handler_test.go       # Handler tests (metrics output, false-negative detection)
+    scorer/scorer.go            # Decision scoring, sorting, and effectiveness stats
+    scorer/scorer_test.go       # Scoring algorithm and effectiveness metrics tests
   config.yaml.example           # Annotated example configuration
   docker-compose.yaml           # Reference compose file
   Dockerfile                    # Multi-stage Docker build
