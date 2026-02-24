@@ -19,9 +19,10 @@ type Config struct {
 	CacheTTL        time.Duration `yaml:"cache_ttl"`
 	UpstreamTimeout time.Duration `yaml:"upstream_timeout"`
 	LogLevel        string        `yaml:"log_level"`
-	Scoring         ScoringConfig `yaml:"scoring"`
-	Health          HealthConfig  `yaml:"health"`
-	Metrics         MetricsConfig `yaml:"metrics"`
+	Scoring         ScoringConfig       `yaml:"scoring"`
+	Health          HealthConfig        `yaml:"health"`
+	Metrics         MetricsConfig       `yaml:"metrics"`
+	Effectiveness   EffectivenessConfig `yaml:"effectiveness"`
 }
 
 // FreshnessBonus awards extra points for recently created decisions.
@@ -77,6 +78,19 @@ type MetricsConfig struct {
 	Path    string `yaml:"path"`
 }
 
+// EffectivenessConfig controls effectiveness metrics collection.
+type EffectivenessConfig struct {
+	TopScenarios       int                 `yaml:"top_scenarios"`
+	FalseNegativeCheck FalseNegativeConfig `yaml:"false_negative_check"`
+}
+
+// FalseNegativeConfig controls the background false-negative detection.
+type FalseNegativeConfig struct {
+	Enabled  bool          `yaml:"enabled"`
+	Interval time.Duration `yaml:"interval"`
+	Lookback time.Duration `yaml:"lookback"`
+}
+
 // Load reads and parses the configuration file.
 func Load(path string) (*Config, error) {
 	data, err := os.ReadFile(path)
@@ -98,6 +112,14 @@ func Load(path string) (*Config, error) {
 		Metrics: MetricsConfig{
 			Enabled: true,
 			Path:    "/metrics",
+		},
+		Effectiveness: EffectivenessConfig{
+			TopScenarios: 20,
+			FalseNegativeCheck: FalseNegativeConfig{
+				Enabled:  true,
+				Interval: 5 * time.Minute,
+				Lookback: 15 * time.Minute,
+			},
 		},
 		Scoring: ScoringConfig{
 			ScenarioMultiplier: 2.0,
