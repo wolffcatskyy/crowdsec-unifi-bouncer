@@ -25,6 +25,8 @@ Two problems, one project.
 
 **The solution:** An installer, persistence scripts, and an optional sidecar proxy that handles all of this. Install once, forget about it.
 
+> **v2.2**: Added effectiveness metrics to the sidecar proxy — per-origin kept/dropped counters, score distribution, recidivism stats, and background false-negative detection. Zero config, just upgrade. See [Sidecar Proxy](#sidecar-proxy-optional-but-recommended).
+
 > **v2.1**: Added an intelligent sidecar proxy that scores and prioritizes decisions so the most dangerous threats always make it into your ipset, even when LAPI has 10x more decisions than your device can hold. See [Sidecar Proxy](#sidecar-proxy-optional-but-recommended).
 
 > **v2.0**: Replaced the old Python/Docker bouncer that used the UniFi controller API. That approach hit MongoDB write storms that froze routers at 2000+ IPs. The native bouncer uses ipset and iptables directly — no controller API, no credentials, 15MB process RAM. See [Migration from Python Bouncer](#migration-from-python-bouncer) if upgrading from v1.x.
@@ -344,7 +346,7 @@ Key metrics:
 - `crowdsec_unifi_bouncer_decisions_dropped_total` — Decisions dropped due to capacity
 - `crowdsec_unifi_bouncer_memory_available_kb` — Available system memory
 
-If using the sidecar, it exposes its own metrics at `/metrics` (default port 8084). See [sidecar/README.md](sidecar/README.md#prometheus-metrics) for the full list.
+If using the sidecar, it exposes its own metrics at `/metrics` (default port 8084), including effectiveness metrics (v2.2.0) that show per-origin kept/dropped counts, score distribution, and false-negative detection. See [sidecar/README.md](sidecar/README.md#prometheus-metrics-reference) for the full list.
 
 A Grafana dashboard is included at `grafana/crowdsec-unifi-bouncer-dashboard.json`.
 

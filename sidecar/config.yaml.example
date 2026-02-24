@@ -109,3 +109,18 @@ health:
 metrics:
   enabled: true
   path: "/metrics"
+
+# Effectiveness metrics (v2.2.0)
+# Controls how scoring effectiveness is measured and reported
+effectiveness:
+  # Number of top scenarios to show individually in metrics
+  # Remaining scenarios are aggregated as "other" to prevent cardinality explosion
+  top_scenarios: 20
+
+  # Background false-negative detection
+  # Periodically queries LAPI for local alerts and cross-references against
+  # dropped IPs. If a dropped IP later attacks your network, it's a false negative.
+  false_negative_check:
+    enabled: true
+    interval: 5m      # How often to check
+    lookback: 15m     # How far back to look for alerts
