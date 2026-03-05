@@ -224,6 +224,8 @@ metrics:
 
 ## Docker Deployment (Recommended)
 
+> **Note:** The sidecar image is **not published to Docker Hub**. You must build it locally from this repository's source code using `docker compose build` (or `docker build`). This is a deliberate choice — see [SECURITY.md](../SECURITY.md). If your platform (e.g., Unraid) requires a pre-built image from a registry, use the [Native Binary Deployment](#native-binary-deployment) method instead, or build the image on a machine with Docker and transfer it with `docker save` / `docker load`.
+
 Add the sidecar service to your existing CrowdSec compose file. The bouncer connects to the sidecar instead of LAPI directly.
 
 ### docker-compose.yaml
@@ -286,6 +288,30 @@ api_url: http://crowdsec-sidecar:8084
 ```
 
 The sidecar uses the same API key your bouncer was registered with. No changes needed on the CrowdSec or bouncer side beyond the URL.
+
+### Building the Image
+
+Since the image is not on Docker Hub, build it locally:
+
+```bash
+# Clone the repo and build
+git clone https://github.com/wolffcatskyy/crowdsec-unifi-bouncer.git
+cd crowdsec-unifi-bouncer/sidecar
+docker compose build
+
+# Or build directly with docker
+docker build -t crowdsec-sidecar:latest .
+```
+
+**Transferring to another host** (e.g., Unraid, NAS):
+
+```bash
+# On the build machine
+docker save crowdsec-sidecar:latest | gzip > crowdsec-sidecar.tar.gz
+
+# Copy to target host, then load
+docker load < crowdsec-sidecar.tar.gz
+```
 
 ### Dockerfile
 

@@ -3,8 +3,11 @@
 # This compose file is for reference. Typically you'd add the sidecar service
 # to your existing CrowdSec compose file.
 #
+# The image is NOT on Docker Hub — it is built locally from this directory.
+#
 # Usage:
-#   docker compose up -d
+#   docker compose build    # build the image from source
+#   docker compose up -d    # start the sidecar
 #
 # The bouncer should connect to the sidecar (port 8084) instead of LAPI directly.
 
