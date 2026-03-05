@@ -4,18 +4,22 @@
 # to your existing CrowdSec compose file.
 #
 # Usage:
-#   docker compose up -d
+#   docker compose up -d    # pull and start the sidecar
+#
+# To build from source instead of pulling, uncomment the 'build' section below.
 #
 # The bouncer should connect to the sidecar (port 8084) instead of LAPI directly.
 
 services:
   crowdsec-sidecar:
-    build:
-      context: .
-      args:
-        VERSION: ${VERSION:-dev}
-        BUILD_TIME: ${BUILD_TIME:-unknown}
     image: ghcr.io/wolffcatskyy/crowdsec-sidecar:latest
+    # To build from source instead of pulling:
+    # build:
+    #   context: .
+    #   args:
+    #     VERSION: ${VERSION:-dev}
+    #     BUILD_TIME: ${BUILD_TIME:-unknown}
+    # image: crowdsec-sidecar:latest
     container_name: crowdsec-sidecar
     restart: unless-stopped
     networks:

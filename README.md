@@ -273,14 +273,26 @@ Only low-signal bulk imports are dropped — and even within those, IPs that app
 
 ### Quick Setup
 
+The sidecar image is available from **GHCR** (`ghcr.io/wolffcatskyy/crowdsec-sidecar`) and **Docker Hub** (`wolffcatskyy/crowdsec-sidecar`). Multi-arch (amd64/arm64).
+
 1. Deploy the sidecar on your CrowdSec host (or any machine that can reach LAPI):
 
 ```bash
-cd sidecar/
+# Download example config
+mkdir -p crowdsec-sidecar && cd crowdsec-sidecar
+curl -sSLO https://raw.githubusercontent.com/wolffcatskyy/crowdsec-unifi-bouncer/main/sidecar/config.yaml.example
 cp config.yaml.example config.yaml
 # Edit config.yaml: set upstream_lapi_url, upstream_lapi_key, max_decisions
-docker compose up -d
+
+# Run with Docker
+docker run -d --name crowdsec-sidecar \
+  -p 8084:8084 \
+  -v $(pwd)/config.yaml:/etc/crowdsec-sidecar/config.yaml:ro \
+  --restart unless-stopped \
+  ghcr.io/wolffcatskyy/crowdsec-sidecar:latest
 ```
+
+Or use docker compose — see [sidecar/README.md](sidecar/README.md#docker-deployment-recommended) for the full compose file.
 
 2. Update your bouncer config on the UniFi device:
 

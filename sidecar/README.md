@@ -1,7 +1,6 @@
 # CrowdSec LAPI Sidecar Proxy
 
 [![License: MIT](https://img.shields.io/badge/License-MIT-blue.svg)](../LICENSE)
-[![GHCR](https://img.shields.io/badge/GHCR-crowdsec--sidecar-blue?logo=github)](https://ghcr.io/wolffcatskyy/crowdsec-sidecar)
 
 A lightweight Go proxy that sits between your CrowdSec firewall bouncer and the LAPI, scoring and filtering decisions to stay within device ipset/nftset capacity limits.
 
@@ -225,11 +224,14 @@ metrics:
 
 ## Docker Deployment (Recommended)
 
-Prebuilt multi-arch images (amd64 + arm64) are published to GHCR on every release:
+The sidecar image is published to both **GitHub Container Registry** and **Docker Hub** on each release:
 
-```bash
-docker pull ghcr.io/wolffcatskyy/crowdsec-sidecar:latest
-```
+| Registry | Image |
+|----------|-------|
+| GHCR | `ghcr.io/wolffcatskyy/crowdsec-sidecar:latest` |
+| Docker Hub | `wolffcatskyy/crowdsec-sidecar:latest` |
+
+Multi-arch images are provided for `linux/amd64` and `linux/arm64`.
 
 Add the sidecar service to your existing CrowdSec compose file. The bouncer connects to the sidecar instead of LAPI directly.
 
@@ -239,6 +241,7 @@ Add the sidecar service to your existing CrowdSec compose file. The bouncer conn
 services:
   crowdsec-sidecar:
     image: ghcr.io/wolffcatskyy/crowdsec-sidecar:latest
+    # Or use Docker Hub: wolffcatskyy/crowdsec-sidecar:latest
     container_name: crowdsec-sidecar
     restart: unless-stopped
     networks:
@@ -288,6 +291,16 @@ api_url: http://crowdsec-sidecar:8084
 ```
 
 The sidecar uses the same API key your bouncer was registered with. No changes needed on the CrowdSec or bouncer side beyond the URL.
+
+### Building from Source (Optional)
+
+If you prefer to build the image yourself instead of pulling from a registry:
+
+```bash
+git clone https://github.com/wolffcatskyy/crowdsec-unifi-bouncer.git
+cd crowdsec-unifi-bouncer/sidecar
+docker build -t crowdsec-sidecar:latest .
+```
 
 ### Dockerfile
 
