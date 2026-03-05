@@ -1,0 +1,87 @@
+name: Docker Publish
+
+on:
+  push:
+    tags:
+      - 'v*'
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: 'Image tag (e.g., latest, v2.1.0)'
+        required: false
+        default: 'latest'
+
+env:
+  GHCR_IMAGE: ghcr.io/${{ github.repository_owner }}/crowdsec-sidecar
+  DOCKERHUB_IMAGE: ${{ secrets.DOCKERHUB_USERNAME }}/crowdsec-sidecar
+
+jobs:
+  build-and-push:
+    name: Build and Push Sidecar Image
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      packages: write
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Set up QEMU
+        uses: docker/setup-qemu-action@v3
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v3
+
+      - name: Extract version from tag
+        id: version
+        run: |
+          if [[ "${{ github.ref_type }}" == "tag" ]]; then
+            VERSION="${{ github.ref_name }}"
+          elif [[ -n "${{ github.event.inputs.tag }}" ]]; then
+            VERSION="${{ github.event.inputs.tag }}"
+          else
+            VERSION="latest"
+          fi
+          echo "version=${VERSION}" >> "$GITHUB_OUTPUT"
+          echo "build_time=$(date -u +'%Y-%m-%dT%H:%M:%SZ')" >> "$GITHUB_OUTPUT"
+
+      - name: Log in to GitHub Container Registry
+        uses: docker/login-action@v3
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Log in to Docker Hub
+        if: secrets.DOCKERHUB_USERNAME != ''
+        uses: docker/login-action@v3
+        with:
+          username: ${{ secrets.DOCKERHUB_USERNAME }}
+          password: ${{ secrets.DOCKERHUB_TOKEN }}
+
+      - name: Generate image tags
+        id: tags
+        run: |
+          VERSION="${{ steps.version.outputs.version }}"
+          TAGS="${{ env.GHCR_IMAGE }}:${VERSION}"
+          TAGS="${TAGS},${{ env.GHCR_IMAGE }}:latest"
+
+          if [[ -n "${{ secrets.DOCKERHUB_USERNAME }}" ]]; then
+            TAGS="${TAGS},${{ env.DOCKERHUB_IMAGE }}:${VERSION}"
+            TAGS="${TAGS},${{ env.DOCKERHUB_IMAGE }}:latest"
+          fi
+
+          echo "tags=${TAGS}" >> "$GITHUB_OUTPUT"
+
+      - name: Build and push
+        uses: docker/build-push-action@v5
+        with:
+          context: sidecar
+          platforms: linux/amd64,linux/arm64
+          push: true
+          tags: ${{ steps.tags.outputs.tags }}
+          build-args: |
+            VERSION=${{ steps.version.outputs.version }}
+            BUILD_TIME=${{ steps.version.outputs.build_time }}
+          cache-from: type=gha
+          cache-to: type=gha,mode=max
