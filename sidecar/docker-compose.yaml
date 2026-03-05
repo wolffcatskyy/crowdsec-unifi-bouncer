@@ -15,7 +15,7 @@ services:
       args:
         VERSION: ${VERSION:-dev}
         BUILD_TIME: ${BUILD_TIME:-unknown}
-    image: crowdsec-sidecar:latest
+    image: ghcr.io/wolffcatskyy/crowdsec-sidecar:latest
     container_name: crowdsec-sidecar
     restart: unless-stopped
     networks:
