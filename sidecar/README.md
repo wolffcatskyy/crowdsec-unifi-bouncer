@@ -1,6 +1,7 @@
 # CrowdSec LAPI Sidecar Proxy
 
 [![License: MIT](https://img.shields.io/badge/License-MIT-blue.svg)](../LICENSE)
+[![GHCR](https://img.shields.io/badge/GHCR-crowdsec--sidecar-blue?logo=github)](https://ghcr.io/wolffcatskyy/crowdsec-sidecar)
 
 A lightweight Go proxy that sits between your CrowdSec firewall bouncer and the LAPI, scoring and filtering decisions to stay within device ipset/nftset capacity limits.
 
@@ -224,6 +225,12 @@ metrics:
 
 ## Docker Deployment (Recommended)
 
+Prebuilt multi-arch images (amd64 + arm64) are published to GHCR on every release:
+
+```bash
+docker pull ghcr.io/wolffcatskyy/crowdsec-sidecar:latest
+```
+
 Add the sidecar service to your existing CrowdSec compose file. The bouncer connects to the sidecar instead of LAPI directly.
 
 ### docker-compose.yaml
@@ -231,12 +238,7 @@ Add the sidecar service to your existing CrowdSec compose file. The bouncer conn
 ```yaml
 services:
   crowdsec-sidecar:
-    build:
-      context: ./sidecar
-      args:
-        VERSION: ${VERSION:-dev}
-        BUILD_TIME: ${BUILD_TIME:-unknown}
-    image: crowdsec-sidecar:latest
+    image: ghcr.io/wolffcatskyy/crowdsec-sidecar:latest
     container_name: crowdsec-sidecar
     restart: unless-stopped
     networks:
