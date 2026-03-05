@@ -11,10 +11,6 @@ on:
         required: false
         default: 'latest'
 
-env:
-  GHCR_IMAGE: ghcr.io/${{ github.repository_owner }}/crowdsec-sidecar
-  DOCKERHUB_IMAGE: ${{ secrets.DOCKERHUB_USERNAME }}/crowdsec-sidecar
-
 jobs:
   build-and-push:
     name: Build and Push Sidecar Image
@@ -22,6 +18,9 @@ jobs:
     permissions:
       contents: read
       packages: write
+    env:
+      GHCR_IMAGE: ghcr.io/${{ github.repository_owner }}/crowdsec-sidecar
+      DOCKERHUB_USERNAME: ${{ secrets.DOCKERHUB_USERNAME }}
     steps:
       - name: Checkout code
         uses: actions/checkout@v4
@@ -53,7 +52,7 @@ jobs:
           password: ${{ secrets.GITHUB_TOKEN }}
 
       - name: Log in to Docker Hub
-        if: ${{ secrets.DOCKERHUB_USERNAME != '' }}
+        if: env.DOCKERHUB_USERNAME != ''
         uses: docker/login-action@v3
         with:
           username: ${{ secrets.DOCKERHUB_USERNAME }}
@@ -66,9 +65,9 @@ jobs:
           TAGS="${{ env.GHCR_IMAGE }}:${VERSION}"
           TAGS="${TAGS},${{ env.GHCR_IMAGE }}:latest"
 
-          if [[ -n "${{ secrets.DOCKERHUB_USERNAME }}" ]]; then
-            TAGS="${TAGS},${{ env.DOCKERHUB_IMAGE }}:${VERSION}"
-            TAGS="${TAGS},${{ env.DOCKERHUB_IMAGE }}:latest"
+          if [[ -n "${DOCKERHUB_USERNAME}" ]]; then
+            TAGS="${TAGS},${DOCKERHUB_USERNAME}/crowdsec-sidecar:${VERSION}"
+            TAGS="${TAGS},${DOCKERHUB_USERNAME}/crowdsec-sidecar:latest"
           fi
 
           echo "tags=${TAGS}" >> "$GITHUB_OUTPUT"
