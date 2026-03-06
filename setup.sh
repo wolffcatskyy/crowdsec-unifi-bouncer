@@ -16,12 +16,31 @@ elif [ -f "$BOUNCER_DIR/detect-device.sh" ]; then
     source "$BOUNCER_DIR/detect-device.sh"
 fi
 
-# Maxelem selection: environment override -> device default
-if [ -z "$MAXELEM" ]; then
-    MAXELEM="${SAFE_MAXELEM:-20000}"
+# Check for unsupported device
+if [ "${UNSUPPORTED_DEVICE:-false}" = "true" ]; then
+    echo "[ERROR] Detected device model: ${DETECTED_NORMALIZED:-Unknown}"
+    echo "[ERROR] This device does not support firewall groups/ipsets"
+    echo "[ERROR] crowdsec-unifi-bouncer cannot run on this device"
+    exit 1
 fi
 
-echo "Device: ${DETECTED_MODEL:-Unknown}"
+# Print startup detection info
+if type print_startup_info >/dev/null 2>&1; then
+    print_startup_info "$DETECTED_MODEL"
+fi
+
+# Maxelem selection: FINAL_MAXELEM from detect-device.sh handles override logic
+# Fallback chain: MAXELEM env -> FINAL_MAXELEM -> SAFE_MAXELEM -> 10000
+if [ -n "${MAXELEM:-}" ]; then
+    # Legacy MAXELEM env var support (deprecated in favor of MAXELEM_OVERRIDE)
+    echo "[INFO] Using legacy MAXELEM=$MAXELEM (consider switching to MAXELEM_OVERRIDE)"
+elif [ -n "${FINAL_MAXELEM:-}" ] && [ "$FINAL_MAXELEM" -gt 0 ] 2>/dev/null; then
+    MAXELEM="$FINAL_MAXELEM"
+else
+    MAXELEM="${SAFE_MAXELEM:-10000}"
+fi
+
+echo "Device: ${DETECTED_NORMALIZED:-Unknown}"
 echo "Maxelem: $MAXELEM"
 
 # Detect sidecar configuration
