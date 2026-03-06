@@ -150,6 +150,9 @@ func (s *Scorer) ScoreAndTruncate(decisions []lapi.Decision, maxDecisions int) [
 	return sorted[:maxDecisions]
 }
 
+// ScoreBucketThresholds defines the histogram bucket boundaries for score distribution.
+var ScoreBucketThresholds = []int{25, 50, 75, 100, 150, 200}
+
 // Stats contains statistics about the scoring operation.
 type Stats struct {
 	TotalDecisions    int
@@ -158,7 +161,19 @@ type Stats struct {
 	MinScore          int
 	MaxScore          int
 	AvgScore          float64
-	ScoreDistribution map[string]int // scenario -> count
+	ScoreDistribution map[string]int // scenario -> count (all decisions)
+
+	// Effectiveness metrics (v2.2.0)
+	OriginKept      map[string]int         // origin -> count of kept decisions
+	OriginDropped   map[string]int         // origin -> count of dropped decisions
+	ScenarioKept    map[string]int         // scenario -> count of kept decisions
+	ScenarioDropped map[string]int         // scenario -> count of dropped decisions
+	MedianScore     int                    // median score across all decisions
+	ScoreCutoff     int                    // lowest score that survived truncation
+	ScoreBuckets    map[int]int            // threshold -> cumulative count of decisions with score <= threshold
+	RecidivismIPs   int                    // unique IPs that received recidivism bonus
+	RecidivismBoosts int                   // total recidivism bonus points applied across all decisions
+	DroppedIPs      map[string]struct{}    // set of IP values that were dropped (for false-negative checking)
 }
 
 // ScoreAndTruncateWithStats is like ScoreAndTruncate but also returns stats.
@@ -166,25 +181,61 @@ func (s *Scorer) ScoreAndTruncateWithStats(decisions []lapi.Decision, maxDecisio
 	stats := Stats{
 		TotalDecisions:    len(decisions),
 		ScoreDistribution: make(map[string]int),
+		OriginKept:        make(map[string]int),
+		OriginDropped:     make(map[string]int),
+		ScenarioKept:      make(map[string]int),
+		ScenarioDropped:   make(map[string]int),
+		ScoreBuckets:      make(map[int]int),
+		DroppedIPs:        make(map[string]struct{}),
 	}
 
 	if len(decisions) == 0 {
 		return decisions, stats
 	}
 
-	// Score and sort
+	// Score and sort (includes recidivism bonus)
 	sorted := s.ScoreAndSort(decisions)
 
-	// Calculate stats
+	// Recidivism stats: count unique IPs with bonus and total bonus applied
+	if s.config.RecidivismBonus > 0 {
+		ipCounts := make(map[string]int)
+		for _, d := range sorted {
+			ipCounts[d.Value]++
+		}
+		for _, count := range ipCounts {
+			if count > 1 {
+				stats.RecidivismIPs++
+				// Each of the `count` decisions gets bonus*(count-1)
+				stats.RecidivismBoosts += s.config.RecidivismBonus * (count - 1) * count
+			}
+		}
+	}
+
+	// Single pass over all sorted decisions: stats, distribution, buckets
 	totalScore := 0
-	stats.MinScore = sorted[len(sorted)-1].Score
 	stats.MaxScore = sorted[0].Score
+	stats.MinScore = sorted[len(sorted)-1].Score
 
 	for _, d := range sorted {
 		totalScore += d.Score
 		stats.ScoreDistribution[d.Scenario]++
+
+		// Score buckets (cumulative: le=T counts all decisions with score <= T)
+		for _, threshold := range ScoreBucketThresholds {
+			if d.Score <= threshold {
+				stats.ScoreBuckets[threshold]++
+			}
+		}
 	}
 	stats.AvgScore = float64(totalScore) / float64(len(sorted))
+
+	// Median score (sorted is descending)
+	mid := len(sorted) / 2
+	if len(sorted)%2 == 0 {
+		stats.MedianScore = (sorted[mid-1].Score + sorted[mid].Score) / 2
+	} else {
+		stats.MedianScore = sorted[mid].Score
+	}
 
 	// Truncate
 	result := sorted
@@ -194,6 +245,26 @@ func (s *Scorer) ScoreAndTruncateWithStats(decisions []lapi.Decision, maxDecisio
 
 	stats.ReturnedDecisions = len(result)
 	stats.DroppedDecisions = stats.TotalDecisions - stats.ReturnedDecisions
+
+	// Score cutoff: lowest score that survived truncation
+	if len(result) > 0 {
+		stats.ScoreCutoff = result[len(result)-1].Score
+	}
+
+	// Per-origin and per-scenario kept counts
+	for _, d := range result {
+		stats.OriginKept[d.Origin]++
+		stats.ScenarioKept[d.Scenario]++
+	}
+
+	// Dropped counts and dropped IP set
+	if len(sorted) > maxDecisions {
+		for _, d := range sorted[maxDecisions:] {
+			stats.OriginDropped[d.Origin]++
+			stats.ScenarioDropped[d.Scenario]++
+			stats.DroppedIPs[d.Value] = struct{}{}
+		}
+	}
 
 	return result, stats
 }

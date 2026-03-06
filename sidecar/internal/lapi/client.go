@@ -162,6 +162,63 @@ type DecisionStream struct {
 	Deleted []Decision `json:"deleted"`
 }
 
+// Alert represents a CrowdSec alert (minimal fields for false-negative detection).
+type Alert struct {
+	ID       int         `json:"id"`
+	Scenario string      `json:"scenario"`
+	Source   AlertSource `json:"source"`
+}
+
+// AlertSource represents the source of an alert.
+type AlertSource struct {
+	IP    string `json:"ip"`
+	Scope string `json:"scope"`
+	Value string `json:"value"`
+}
+
+// GetAlerts fetches alerts from the LAPI with optional query parameters.
+func (c *Client) GetAlerts(ctx context.Context, params url.Values) ([]Alert, error) {
+	reqURL := c.baseURL + "/v1/alerts"
+	if len(params) > 0 {
+		reqURL += "?" + params.Encode()
+	}
+
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, reqURL, nil)
+	if err != nil {
+		return nil, fmt.Errorf("creating request: %w", err)
+	}
+
+	req.Header.Set("X-Api-Key", c.apiKey)
+	req.Header.Set("Accept", "application/json")
+
+	resp, err := c.httpClient.Do(req)
+	if err != nil {
+		return nil, fmt.Errorf("executing request: %w", err)
+	}
+	defer resp.Body.Close()
+
+	if resp.StatusCode != http.StatusOK {
+		body, _ := io.ReadAll(resp.Body)
+		return nil, fmt.Errorf("LAPI returned status %d: %s", resp.StatusCode, string(body))
+	}
+
+	body, err := io.ReadAll(resp.Body)
+	if err != nil {
+		return nil, fmt.Errorf("reading response body: %w", err)
+	}
+
+	if string(body) == "null" {
+		return []Alert{}, nil
+	}
+
+	var alerts []Alert
+	if err := json.Unmarshal(body, &alerts); err != nil {
+		return nil, fmt.Errorf("parsing alerts: %w", err)
+	}
+
+	return alerts, nil
+}
+
 // parseDuration parses CrowdSec duration format (e.g., "4h", "24h", "168h").
 func parseDuration(s string) (time.Duration, error) {
 	// CrowdSec uses Go-style durations, but may also use "s", "m", "h" suffixes

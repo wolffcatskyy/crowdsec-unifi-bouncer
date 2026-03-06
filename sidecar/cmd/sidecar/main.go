@@ -68,6 +68,9 @@ func main() {
 	// Create handler
 	handler := proxy.New(cfg, logger)
 
+	// Start background checks (false-negative detection)
+	handler.StartBackgroundChecks(context.Background())
+
 	// Create server
 	// WriteTimeout must exceed upstream_timeout (default 120s) to allow startup=true
 	// queries against a large CrowdSec DB to complete before the connection is cut.
@@ -94,6 +97,9 @@ func main() {
 	sig := <-quit
 
 	logger.Info("shutting down", "signal", sig.String())
+
+	// Stop background checks
+	handler.StopBackgroundChecks()
 
 	// Graceful shutdown with timeout
 	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
