@@ -158,6 +158,59 @@ upstream_lapi_key: "test-api-key"
 	if cfg.Scoring.RecidivismBonus != 15 {
 		t.Errorf("RecidivismBonus default = %v, want 15", cfg.Scoring.RecidivismBonus)
 	}
+
+	// Check effectiveness defaults
+	if cfg.Effectiveness.TopScenarios != 20 {
+		t.Errorf("Effectiveness.TopScenarios default = %v, want 20", cfg.Effectiveness.TopScenarios)
+	}
+	if !cfg.Effectiveness.FalseNegativeCheck.Enabled {
+		t.Error("Effectiveness.FalseNegativeCheck.Enabled default should be true")
+	}
+	if cfg.Effectiveness.FalseNegativeCheck.Interval != 5*time.Minute {
+		t.Errorf("Effectiveness.FalseNegativeCheck.Interval default = %v, want 5m", cfg.Effectiveness.FalseNegativeCheck.Interval)
+	}
+	if cfg.Effectiveness.FalseNegativeCheck.Lookback != 15*time.Minute {
+		t.Errorf("Effectiveness.FalseNegativeCheck.Lookback default = %v, want 15m", cfg.Effectiveness.FalseNegativeCheck.Lookback)
+	}
+}
+
+func TestLoad_EffectivenessOverrides(t *testing.T) {
+	tmpDir := t.TempDir()
+	configPath := filepath.Join(tmpDir, "config.yaml")
+
+	configContent := `
+upstream_lapi_url: "http://localhost:8080"
+upstream_lapi_key: "test-api-key"
+
+effectiveness:
+  top_scenarios: 10
+  false_negative_check:
+    enabled: false
+    interval: 10m
+    lookback: 30m
+`
+
+	if err := os.WriteFile(configPath, []byte(configContent), 0644); err != nil {
+		t.Fatalf("Failed to write test config: %v", err)
+	}
+
+	cfg, err := Load(configPath)
+	if err != nil {
+		t.Fatalf("Load() error = %v", err)
+	}
+
+	if cfg.Effectiveness.TopScenarios != 10 {
+		t.Errorf("TopScenarios = %v, want 10", cfg.Effectiveness.TopScenarios)
+	}
+	if cfg.Effectiveness.FalseNegativeCheck.Enabled {
+		t.Error("FalseNegativeCheck.Enabled should be false")
+	}
+	if cfg.Effectiveness.FalseNegativeCheck.Interval != 10*time.Minute {
+		t.Errorf("FalseNegativeCheck.Interval = %v, want 10m", cfg.Effectiveness.FalseNegativeCheck.Interval)
+	}
+	if cfg.Effectiveness.FalseNegativeCheck.Lookback != 30*time.Minute {
+		t.Errorf("FalseNegativeCheck.Lookback = %v, want 30m", cfg.Effectiveness.FalseNegativeCheck.Lookback)
+	}
 }
 
 func TestLoad_Validation(t *testing.T) {
