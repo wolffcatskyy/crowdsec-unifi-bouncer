@@ -3,6 +3,9 @@
 [![Mentioned in Awesome UniFi](https://awesome.re/mentioned-badge.svg)](https://github.com/wolffcatskyy/awesome-unifi)
 [![ShellCheck](https://github.com/wolffcatskyy/crowdsec-unifi-bouncer/actions/workflows/lint.yml/badge.svg)](https://github.com/wolffcatskyy/crowdsec-unifi-bouncer/actions/workflows/lint.yml)
 
+> [!TIP]
+> **v2.3.0 Released** — Stream-aware decision capping prevents ipset overflow on high-churn networks. Configure `MAX_DECISIONS` and `EVICTION_MODE` to control CAPI decision limits. Local decisions always pass through. [Release notes](https://github.com/wolffcatskyy/crowdsec-unifi-bouncer/releases/tag/v2.3.0)
+
 > [!CAUTION]
 > **Beware of impostor repositories!** The official CrowdSec UniFi Bouncer is hosted at `wolffcatskyy/crowdsec-unifi-bouncer`. We do **not** distribute ZIP file downloads or executable installers. If you see a repo offering "one-click downloads" of this project, it may contain malware. Always install via the official instructions below.
 
