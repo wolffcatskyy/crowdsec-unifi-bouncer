@@ -33,8 +33,8 @@ USER sidecar
 
 EXPOSE 8084
 
-HEALTHCHECK --interval=30s --timeout=5s --start-period=5s --retries=3 \
-    CMD wget -q --spider http://localhost:8084/health || exit 1
+HEALTHCHECK --interval=30s --timeout=5s --start-period=10s --retries=3 \
+    CMD wget -q -O- http://127.0.0.1:8084/health || exit 1
 
 ENTRYPOINT ["crowdsec-sidecar"]
 CMD ["-config", "/etc/crowdsec-sidecar/config.yaml"]

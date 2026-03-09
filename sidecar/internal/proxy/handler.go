@@ -20,11 +20,12 @@ import (
 
 // Handler handles HTTP requests and proxies to the upstream LAPI.
 type Handler struct {
-	cfg       *config.Config
-	client    *lapi.Client
-	scorer    *scorer.Scorer
-	logger    *slog.Logger
-	startTime time.Time
+	cfg             *config.Config
+	client          *lapi.Client
+	scorer          *scorer.Scorer
+	logger          *slog.Logger
+	startTime       time.Time
+	passthroughHTTP *http.Client
 
 	// Cache
 	cacheMu     sync.RWMutex
@@ -62,6 +63,14 @@ func New(cfg *config.Config, logger *slog.Logger) *Handler {
 		scorer:    scorer.New(&cfg.Scoring),
 		logger:    logger,
 		startTime: time.Now(),
+		passthroughHTTP: &http.Client{
+			Timeout: 30 * time.Second,
+			Transport: &http.Transport{
+				MaxIdleConns:        10,
+				MaxIdleConnsPerHost: 5,
+				IdleConnTimeout:     90 * time.Second,
+			},
+		},
 	}
 }
 
@@ -528,8 +537,7 @@ func (h *Handler) proxyPassthrough(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 
-	client := &http.Client{Timeout: 30 * time.Second}
-	resp, err := client.Do(req)
+	resp, err := h.passthroughHTTP.Do(req)
 	if err != nil {
 		h.logger.Error("upstream request failed", "error", err)
 		http.Error(w, "upstream request failed", http.StatusBadGateway)

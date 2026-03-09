@@ -8,8 +8,18 @@
 set -e
 
 BOUNCER_DIR="/data/crowdsec-bouncer"
-BOUNCER_VERSION="${BOUNCER_VERSION:-v0.0.34}"
 ARCH="${ARCH:-$(dpkg --print-architecture 2>/dev/null || echo amd64)}"
+
+# Fetch latest version from GitHub API if not explicitly set
+if [ -z "$BOUNCER_VERSION" ]; then
+    BOUNCER_VERSION=$(wget -q -O- https://api.github.com/repos/crowdsecurity/cs-firewall-bouncer/releases/latest 2>/dev/null \
+        | grep '"tag_name"' | head -1 | sed 's/.*"tag_name": *"\([^"]*\)".*/\1/')
+    if [ -z "$BOUNCER_VERSION" ]; then
+        echo "Warning: Could not fetch latest version from GitHub API, falling back to v0.0.41"
+        BOUNCER_VERSION="v0.0.41"
+    fi
+fi
+
 DOWNLOAD_URL="https://github.com/crowdsecurity/cs-firewall-bouncer/releases/download/${BOUNCER_VERSION}/crowdsec-firewall-bouncer-linux-${ARCH}.tgz"
 
 echo "=== CrowdSec Firewall Bouncer Installer ==="
