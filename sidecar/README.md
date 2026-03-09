@@ -182,6 +182,24 @@ scoring:
 | `cidr_bonuses[].bonus` | int | -- | Bonus points for decisions in this prefix range. |
 | `recidivism_bonus` | int | `15` | Extra points per additional decision for the same IP. If an IP has 3 decisions, each gets +15*(3-1) = +30. |
 
+### Eviction Mode
+
+The `eviction_mode` setting controls how the sidecar handles incremental CAPI decisions that arrive between full syncs (every ~2 hours). When the bouncer polls `/v1/decisions/stream` with `startup=false`, the sidecar tracks cumulative CAPI decision count and enforces the `max_decisions` cap.
+
+| Mode | Behavior | Best For |
+|------|----------|----------|
+| `cap` (default) | Stops adding new CAPI decisions once at the limit. New decisions are silently dropped until the next full sync rescores and reprioritizes everything. | **Most deployments.** Stable ipset count, predictable memory usage, no churn. The full sync (every ~2h) will pick up anything important that was missed. |
+| `evict` | Replaces the oldest tracked CAPI decisions with newer ones when at the limit. Generates additional `deleted` entries in the stream response so the bouncer removes stale IPs from ipset. | **High-churn environments** where fresh threats matter more than stable blocklists. Useful if your CAPI feed rotates quickly and you want the newest IPs blocked at all times. |
+
+Both modes always pass through local decisions (origin: `crowdsec`, `cscli`) regardless of the CAPI cap. Local detections from your own network are never dropped or evicted.
+
+```yaml
+# In config.yaml:
+eviction_mode: "cap"    # or "evict"
+```
+
+The mode can also be set via the `EVICTION_MODE` environment variable, which takes precedence over the config file value.
+
 ### Health Section
 
 ```yaml
