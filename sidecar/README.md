@@ -260,12 +260,13 @@ effectiveness:
 
 ## Docker Deployment (Recommended)
 
-The sidecar image is published to both **GitHub Container Registry** and **Docker Hub** on each release:
+The sidecar image is published to **GitHub Container Registry (GHCR)** on each release:
 
 | Registry | Image |
 |----------|-------|
 | GHCR | `ghcr.io/wolffcatskyy/crowdsec-sidecar:latest` |
-| Docker Hub | `wolffcatskyy/crowdsec-sidecar:latest` |
+
+> **Note:** Images are published to GHCR only. Docker Hub is not configured.
 
 Multi-arch images are provided for `linux/amd64` and `linux/arm64`.
 
@@ -277,7 +278,6 @@ Add the sidecar service to your existing CrowdSec compose file. The bouncer conn
 services:
   crowdsec-sidecar:
     image: ghcr.io/wolffcatskyy/crowdsec-sidecar:latest
-    # Or use Docker Hub: wolffcatskyy/crowdsec-sidecar:latest
     container_name: crowdsec-sidecar
     restart: unless-stopped
     networks:

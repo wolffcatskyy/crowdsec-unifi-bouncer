@@ -346,7 +346,7 @@ Only low-signal bulk imports are dropped — and even within those, IPs that app
 
 ### Quick Setup
 
-The sidecar image is available from **GHCR** (`ghcr.io/wolffcatskyy/crowdsec-sidecar`) and **Docker Hub** (`wolffcatskyy/crowdsec-sidecar`). Multi-arch (amd64/arm64).
+The sidecar image is published to **GHCR** (`ghcr.io/wolffcatskyy/crowdsec-sidecar`). Multi-arch (amd64/arm64). Images are published to GHCR only — Docker Hub is not configured.
 
 1. Deploy the sidecar on your CrowdSec host (or any machine that can reach LAPI):
 
