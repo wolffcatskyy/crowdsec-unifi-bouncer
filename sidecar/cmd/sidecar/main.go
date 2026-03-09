@@ -62,6 +62,7 @@ func main() {
 		"listen_addr", cfg.ListenAddr,
 		"upstream", cfg.UpstreamLAPIURL,
 		"max_decisions", cfg.MaxDecisions,
+		"eviction_mode", cfg.EvictionMode,
 		"cache_ttl", cfg.CacheTTL.String(),
 	)
 
