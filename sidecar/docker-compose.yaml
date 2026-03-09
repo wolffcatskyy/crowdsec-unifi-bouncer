@@ -30,6 +30,9 @@ services:
       - ./config.yaml:/etc/crowdsec-sidecar/config.yaml:ro
     environment:
       - TZ=America/Los_Angeles
+      # EVICTION_MODE controls what happens when CAPI decisions exceed max_decisions
+      # between full syncs. Options: "cap" (default, drop new) or "evict" (replace oldest)
+      # - EVICTION_MODE=cap
     depends_on:
       - crowdsec
     healthcheck:
