@@ -16,6 +16,7 @@ type Config struct {
 	UpstreamLAPIURL string        `yaml:"upstream_lapi_url"`
 	UpstreamLAPIKey string        `yaml:"upstream_lapi_key"`
 	MaxDecisions    int           `yaml:"max_decisions"`
+	EvictionMode    string        `yaml:"eviction_mode"` // "cap" (default) or "evict"
 	CacheTTL        time.Duration `yaml:"cache_ttl"`
 	UpstreamTimeout time.Duration `yaml:"upstream_timeout"`
 	LogLevel        string        `yaml:"log_level"`
@@ -150,6 +151,14 @@ func Load(path string) (*Config, error) {
 		return nil, fmt.Errorf("parsing config file: %w", err)
 	}
 
+	// Environment variable overrides
+	if envMode := os.Getenv("EVICTION_MODE"); envMode != "" {
+		cfg.EvictionMode = envMode
+	}
+	if cfg.EvictionMode == "" {
+		cfg.EvictionMode = "cap"
+	}
+
 	if err := cfg.Validate(); err != nil {
 		return nil, fmt.Errorf("validating config: %w", err)
 	}
@@ -177,6 +186,9 @@ func (c *Config) Validate() error {
 	}
 	if c.CacheTTL < 0 {
 		return fmt.Errorf("cache_ttl cannot be negative")
+	}
+	if c.EvictionMode != "" && c.EvictionMode != "cap" && c.EvictionMode != "evict" {
+		return fmt.Errorf("eviction_mode must be 'cap' or 'evict', got %q", c.EvictionMode)
 	}
 	return nil
 }
