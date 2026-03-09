@@ -17,6 +17,13 @@ upstream_lapi_key: "YOUR_BOUNCER_KEY"
 # Example: device maxelem=20000, set max_decisions=18000
 max_decisions: 18000
 
+# Eviction mode for incremental stream capping (env: EVICTION_MODE)
+# Controls what happens when CAPI decisions exceed max_decisions between full syncs:
+#   "cap" (default) - Stop adding new CAPI decisions once at the limit
+#   "evict"         - Replace oldest CAPI decisions with newer ones when at the limit
+# Local decisions (origin: crowdsec, cscli) are always passed through regardless of mode.
+eviction_mode: "cap"
+
 # How long to cache LAPI responses
 # Reduces load on LAPI while ensuring bouncer gets fresh-enough data
 cache_ttl: 60s

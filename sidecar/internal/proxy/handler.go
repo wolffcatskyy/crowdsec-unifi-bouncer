@@ -16,6 +16,7 @@ import (
 	"github.com/wolffcatskyy/crowdsec-unifi-bouncer/sidecar/internal/config"
 	"github.com/wolffcatskyy/crowdsec-unifi-bouncer/sidecar/internal/lapi"
 	"github.com/wolffcatskyy/crowdsec-unifi-bouncer/sidecar/internal/scorer"
+	"github.com/wolffcatskyy/crowdsec-unifi-bouncer/sidecar/internal/tracker"
 )
 
 // Handler handles HTTP requests and proxies to the upstream LAPI.
@@ -49,6 +50,9 @@ type Handler struct {
 	falseNegativesTotal    atomic.Int64
 	falseNegativeLastCheck atomic.Int64 // unix timestamp
 
+	// Stream-aware decision capping
+	streamTracker *tracker.StreamTracker
+
 	// Background checks
 	bgCancel context.CancelFunc
 	bgWg     sync.WaitGroup
@@ -57,11 +61,12 @@ type Handler struct {
 // New creates a new Handler.
 func New(cfg *config.Config, logger *slog.Logger) *Handler {
 	return &Handler{
-		cfg:       cfg,
-		client:    lapi.NewClient(cfg.UpstreamLAPIURL, cfg.UpstreamLAPIKey, cfg.UpstreamTimeout),
-		scorer:    scorer.New(&cfg.Scoring),
-		logger:    logger,
-		startTime: time.Now(),
+		cfg:           cfg,
+		client:        lapi.NewClient(cfg.UpstreamLAPIURL, cfg.UpstreamLAPIKey, cfg.UpstreamTimeout),
+		scorer:        scorer.New(&cfg.Scoring),
+		logger:        logger,
+		startTime:     time.Now(),
+		streamTracker: tracker.New(cfg.MaxDecisions, tracker.EvictionMode(cfg.EvictionMode), logger),
 	}
 }
 
@@ -172,25 +177,42 @@ func (h *Handler) handleDecisionsStream(w http.ResponseWriter, r *http.Request) 
 	h.lastUpstreamCall = time.Now()
 	h.metricsMu.Unlock()
 
-	// Score and truncate new decisions
-	if len(stream.New) > 0 {
-		var stats scorer.Stats
-		stream.New, stats = h.scorer.ScoreAndTruncateWithStats(stream.New, h.cfg.MaxDecisions)
+	if startup {
+		// Full sync: score, truncate to max_decisions, and initialize stream tracker
+		if len(stream.New) > 0 {
+			var stats scorer.Stats
+			stream.New, stats = h.scorer.ScoreAndTruncateWithStats(stream.New, h.cfg.MaxDecisions)
 
-		// Store stats and dropped IPs from stream scoring
-		h.droppedIPsMu.Lock()
-		h.droppedIPs = stats.DroppedIPs
-		h.droppedIPsMu.Unlock()
+			// Store stats and dropped IPs from stream scoring
+			h.droppedIPsMu.Lock()
+			h.droppedIPs = stats.DroppedIPs
+			h.droppedIPsMu.Unlock()
 
-		h.cacheMu.Lock()
-		h.cacheStats = stats
-		h.cacheMu.Unlock()
+			h.cacheMu.Lock()
+			h.cacheStats = stats
+			h.cacheMu.Unlock()
+		}
+
+		// Initialize tracker from the decisions that survived truncation
+		h.streamTracker.Reset()
+		h.streamTracker.SetCapFromFullSync(stream.New)
+	} else {
+		// Incremental: apply stream-aware capping
+		// The tracker enforces cumulative CAPI cap between full syncs
+		// while always passing through local decisions.
+		stream.New = h.streamTracker.FilterStreamDecisions(stream)
 	}
 
+	// Log with tracker metrics for observability
+	trackerMetrics := h.streamTracker.GetMetrics()
 	h.logger.Info("processed decision stream",
 		"new", len(stream.New),
 		"deleted", len(stream.Deleted),
 		"startup", startup,
+		"capi_count", trackerMetrics.CAPICount,
+		"capi_max", trackerMetrics.MaxDecisions,
+		"stream_passed", trackerMetrics.DecisionsPassed,
+		"stream_dropped", trackerMetrics.DecisionsDropped,
 	)
 
 	w.Header().Set("Content-Type", "application/json")
@@ -355,6 +377,42 @@ func (h *Handler) handleMetrics(w http.ResponseWriter, r *http.Request) {
 	fmt.Fprintf(w, "# HELP crowdsec_sidecar_false_negative_check_time Unix timestamp of last false-negative check\n")
 	fmt.Fprintf(w, "# TYPE crowdsec_sidecar_false_negative_check_time gauge\n")
 	fmt.Fprintf(w, "crowdsec_sidecar_false_negative_check_time %d\n", h.falseNegativeLastCheck.Load())
+
+	// --- Stream capping metrics ---
+
+	sm := h.streamTracker.GetMetrics()
+
+	fmt.Fprintf(w, "# HELP crowdsec_sidecar_stream_decisions_passed Total incremental CAPI+local decisions passed through\n")
+	fmt.Fprintf(w, "# TYPE crowdsec_sidecar_stream_decisions_passed counter\n")
+	fmt.Fprintf(w, "crowdsec_sidecar_stream_decisions_passed %d\n", sm.DecisionsPassed)
+
+	fmt.Fprintf(w, "# HELP crowdsec_sidecar_stream_decisions_dropped Total incremental CAPI decisions dropped by stream cap\n")
+	fmt.Fprintf(w, "# TYPE crowdsec_sidecar_stream_decisions_dropped counter\n")
+	fmt.Fprintf(w, "crowdsec_sidecar_stream_decisions_dropped %d\n", sm.DecisionsDropped)
+
+	fmt.Fprintf(w, "# HELP crowdsec_sidecar_stream_evictions Total CAPI decisions evicted to make room for newer ones\n")
+	fmt.Fprintf(w, "# TYPE crowdsec_sidecar_stream_evictions counter\n")
+	fmt.Fprintf(w, "crowdsec_sidecar_stream_evictions %d\n", sm.Evictions)
+
+	fmt.Fprintf(w, "# HELP crowdsec_sidecar_stream_full_syncs Total number of full syncs (tracker resets)\n")
+	fmt.Fprintf(w, "# TYPE crowdsec_sidecar_stream_full_syncs counter\n")
+	fmt.Fprintf(w, "crowdsec_sidecar_stream_full_syncs %d\n", sm.FullSyncs)
+
+	fmt.Fprintf(w, "# HELP crowdsec_sidecar_stream_last_full_sync Unix timestamp of last full sync\n")
+	fmt.Fprintf(w, "# TYPE crowdsec_sidecar_stream_last_full_sync gauge\n")
+	fmt.Fprintf(w, "crowdsec_sidecar_stream_last_full_sync %d\n", sm.LastFullSync)
+
+	fmt.Fprintf(w, "# HELP crowdsec_sidecar_stream_capi_count Current number of CAPI decisions tracked since last full sync\n")
+	fmt.Fprintf(w, "# TYPE crowdsec_sidecar_stream_capi_count gauge\n")
+	fmt.Fprintf(w, "crowdsec_sidecar_stream_capi_count %d\n", sm.CAPICount)
+
+	fmt.Fprintf(w, "# HELP crowdsec_sidecar_stream_eviction_mode Current eviction mode (0=cap, 1=evict)\n")
+	fmt.Fprintf(w, "# TYPE crowdsec_sidecar_stream_eviction_mode gauge\n")
+	evictionModeVal := 0
+	if sm.EvictionMode == "evict" {
+		evictionModeVal = 1
+	}
+	fmt.Fprintf(w, "crowdsec_sidecar_stream_eviction_mode %d\n", evictionModeVal)
 }
 
 // writeTopNMetric writes a Prometheus metric for the top N entries of a map,
