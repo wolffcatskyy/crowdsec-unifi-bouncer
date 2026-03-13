@@ -117,7 +117,7 @@ metrics:
   enabled: true
   path: "/metrics"
 
-# AbuseIPDB reporting (v2.3.0)
+# AbuseIPDB reporting (v2.4.0)
 # Optionally report banned IPs to AbuseIPDB when new local decisions are processed.
 # Only reports NEW incremental decisions (not startup/full-sync existing bans).
 # Skips CAPI and blocklist-import decisions to avoid circular reporting.

@@ -10,7 +10,7 @@
 Drop-in install of the official [CrowdSec firewall bouncer](https://github.com/crowdsecurity/cs-firewall-bouncer) on UniFi OS devices — with persistence that survives firmware updates, reboots, and controller reprovisioning. Includes an intelligent sidecar proxy that scores and prioritizes threats when you have more decisions than your device can hold.
 
 > [!TIP]
-> **v2.3.0 Released** — Stream-aware decision capping prevents ipset overflow on high-churn networks. Configure `MAX_DECISIONS` and `EVICTION_MODE` to control CAPI decision limits. Local decisions always pass through. [Release notes](https://github.com/wolffcatskyy/crowdsec-unifi-bouncer/releases/tag/v2.3.0)
+> **v2.4.0 Released** — AbuseIPDB reporting is now built into the sidecar. Automatically report locally-banned IPs to AbuseIPDB, contributing your CrowdSec detections to community threat intelligence. See [AbuseIPDB Reporting](#abuseipdb-reporting-optional) to enable it. [Release notes](https://github.com/wolffcatskyy/crowdsec-unifi-bouncer/releases/tag/v2.4.0)
 
 > [!CAUTION]
 > **Beware of impostor repositories.** The official CrowdSec UniFi Bouncer is hosted at [`wolffcatskyy/crowdsec-unifi-bouncer`](https://github.com/wolffcatskyy/crowdsec-unifi-bouncer). We do **not** distribute ZIP file downloads or executable installers. If you see a repo offering "one-click downloads" of this project, it may contain malware. Always install via the official instructions below.
@@ -686,7 +686,7 @@ MIT -- see [LICENSE](LICENSE)
 <details>
 <summary><strong>Changelog Highlights</strong></summary>
 
-**v2.4.0** (unreleased) -- AbuseIPDB reporting. Automatically reports locally-banned IPs to AbuseIPDB with scenario-to-category mapping, daily rate limiting, and smart origin filtering. Fire-and-forget, never affects bouncer operation.
+**v2.4.0** -- AbuseIPDB reporting. Automatically reports locally-banned IPs to AbuseIPDB with scenario-to-category mapping, daily rate limiting, and smart origin filtering. Fire-and-forget, never affects bouncer operation.
 
 **v2.3.0** -- Stream-aware decision capping. `MAX_DECISIONS` and `EVICTION_MODE` control CAPI decision limits. Local decisions always pass through.
 
