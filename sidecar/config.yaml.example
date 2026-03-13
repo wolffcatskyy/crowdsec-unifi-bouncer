@@ -117,6 +117,23 @@ metrics:
   enabled: true
   path: "/metrics"
 
+# AbuseIPDB reporting (v2.3.0)
+# Optionally report banned IPs to AbuseIPDB when new local decisions are processed.
+# Only reports NEW incremental decisions (not startup/full-sync existing bans).
+# Skips CAPI and blocklist-import decisions to avoid circular reporting.
+abuseipdb:
+  # Enable AbuseIPDB reporting (default: false)
+  # Can also be set via ABUSEIPDB_REPORT_ENABLED=true environment variable.
+  enabled: false
+
+  # AbuseIPDB API key (get one at https://www.abuseipdb.com/account/api)
+  # Can also be set via ABUSEIPDB_API_KEY environment variable.
+  # api_key: "YOUR_ABUSEIPDB_API_KEY"
+
+  # Daily report limit to stay within AbuseIPDB rate limits.
+  # Free tier: 100/day, Premium: 3000/day.
+  daily_limit: 100
+
 # Effectiveness metrics (v2.2.0)
 # Controls how scoring effectiveness is measured and reported
 effectiveness:

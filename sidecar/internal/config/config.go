@@ -7,6 +7,7 @@ import (
 	"regexp"
 	"time"
 
+	"github.com/wolffcatskyy/crowdsec-unifi-bouncer/sidecar/internal/abuseipdb"
 	"gopkg.in/yaml.v3"
 )
 
@@ -24,6 +25,7 @@ type Config struct {
 	Health          HealthConfig        `yaml:"health"`
 	Metrics         MetricsConfig       `yaml:"metrics"`
 	Effectiveness   EffectivenessConfig `yaml:"effectiveness"`
+	AbuseIPDB       abuseipdb.Config    `yaml:"abuseipdb"`
 }
 
 // FreshnessBonus awards extra points for recently created decisions.
@@ -157,6 +159,22 @@ func Load(path string) (*Config, error) {
 	}
 	if cfg.EvictionMode == "" {
 		cfg.EvictionMode = "cap"
+	}
+
+	// AbuseIPDB environment variable overrides
+	if envKey := os.Getenv("ABUSEIPDB_API_KEY"); envKey != "" {
+		cfg.AbuseIPDB.APIKey = envKey
+	}
+	if envEnabled := os.Getenv("ABUSEIPDB_REPORT_ENABLED"); envEnabled != "" {
+		cfg.AbuseIPDB.Enabled = envEnabled == "true" || envEnabled == "1"
+	}
+	// Auto-enable if API key is provided but enabled was not explicitly set.
+	if cfg.AbuseIPDB.APIKey != "" && !cfg.AbuseIPDB.Enabled {
+		// Check if enabled was explicitly set to false in the config file.
+		// If it wasn't set at all (zero value), auto-enable.
+		// Since bool zero value is false, we check if the key was provided
+		// as a signal that the user wants reporting.
+		// Only auto-enable via env var override (already handled above).
 	}
 
 	if err := cfg.Validate(); err != nil {
