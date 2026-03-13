@@ -489,6 +489,20 @@ All metrics are exposed at the `/metrics` endpoint in Prometheus text format.
 | `crowdsec_sidecar_false_negatives_total` | counter | | IPs that were dropped by scoring but later attacked locally. Should always be 0. |
 | `crowdsec_sidecar_false_negative_check_time` | gauge | | Unix timestamp of the last false-negative check. |
 
+### Stream Capping Metrics (v2.3.0)
+
+These metrics track the behavior of incremental CAPI decision capping during stream operations (between full syncs).
+
+| Metric | Type | Description |
+|--------|------|-------------|
+| `crowdsec_sidecar_stream_decisions_passed` | counter | Incremental CAPI+local decisions passed through. |
+| `crowdsec_sidecar_stream_decisions_dropped` | counter | Incremental CAPI decisions dropped by stream cap. |
+| `crowdsec_sidecar_stream_evictions` | counter | CAPI decisions evicted to make room for newer ones (evict mode only). |
+| `crowdsec_sidecar_stream_full_syncs` | counter | Number of full syncs (tracker resets). |
+| `crowdsec_sidecar_stream_last_full_sync` | gauge | Unix timestamp of last full sync. |
+| `crowdsec_sidecar_stream_capi_count` | gauge | Current number of CAPI decisions tracked since last full sync. |
+| `crowdsec_sidecar_stream_eviction_mode` | gauge | Current eviction mode (0=cap, 1=evict). |
+
 ### AbuseIPDB Metrics (v2.4.0)
 
 These metrics are only emitted when AbuseIPDB reporting is enabled.

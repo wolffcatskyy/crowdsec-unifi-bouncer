@@ -28,6 +28,11 @@ eviction_mode: "cap"
 # Reduces load on LAPI while ensuring bouncer gets fresh-enough data
 cache_ttl: 60s
 
+# Timeout for upstream LAPI requests
+# Large decision sets (120K+) can take time, especially on startup=true stream queries
+# Increase this if you see frequent "context deadline exceeded" errors
+# upstream_timeout: 120s
+
 # Log level: debug, info, warn, error
 log_level: "info"
 
