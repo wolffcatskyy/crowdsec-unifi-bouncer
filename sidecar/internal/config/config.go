@@ -11,7 +11,6 @@ import (
 	"gopkg.in/yaml.v3"
 )
 
-// Config represents the complete sidecar configuration.
 type Config struct {
 	ListenAddr      string        `yaml:"listen_addr"`
 	UpstreamLAPIURL string        `yaml:"upstream_lapi_url"`
@@ -168,15 +167,6 @@ func Load(path string) (*Config, error) {
 	if envEnabled := os.Getenv("ABUSEIPDB_REPORT_ENABLED"); envEnabled != "" {
 		cfg.AbuseIPDB.Enabled = envEnabled == "true" || envEnabled == "1"
 	}
-	// Auto-enable if API key is provided but enabled was not explicitly set.
-	if cfg.AbuseIPDB.APIKey != "" && !cfg.AbuseIPDB.Enabled {
-		// Check if enabled was explicitly set to false in the config file.
-		// If it wasn't set at all (zero value), auto-enable.
-		// Since bool zero value is false, we check if the key was provided
-		// as a signal that the user wants reporting.
-		// Only auto-enable via env var override (already handled above).
-	}
-
 	if err := cfg.Validate(); err != nil {
 		return nil, fmt.Errorf("validating config: %w", err)
 	}
@@ -205,7 +195,7 @@ func (c *Config) Validate() error {
 	if c.CacheTTL < 0 {
 		return fmt.Errorf("cache_ttl cannot be negative")
 	}
-	if c.EvictionMode != "" && c.EvictionMode != "cap" && c.EvictionMode != "evict" {
+	if c.EvictionMode != "cap" && c.EvictionMode != "evict" {
 		return fmt.Errorf("eviction_mode must be 'cap' or 'evict', got %q", c.EvictionMode)
 	}
 	return nil

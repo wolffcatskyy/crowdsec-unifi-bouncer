@@ -68,7 +68,8 @@ if [[ "${BASH_SOURCE[0]}" == "${0}" ]]; then
     esac
 fi
 
-# Export variables when sourced
+# Export variables when sourced (skip if running directly — already handled above)
+if [[ "${BASH_SOURCE[0]}" != "${0}" ]]; then
 SIDECAR_MODE=$(detect_sidecar_mode)
 export SIDECAR_MODE
 BOUNCER_UPSTREAM=""
@@ -76,3 +77,4 @@ if [ -f "$BOUNCER_CONFIG" ]; then
     BOUNCER_UPSTREAM=$(grep -E "^api_url:" "$BOUNCER_CONFIG" 2>/dev/null | awk '{print $2}' | tr -d '"' | tr -d "'")
 fi
 export BOUNCER_UPSTREAM
+fi

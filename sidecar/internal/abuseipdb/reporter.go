@@ -132,7 +132,6 @@ func New(cfg Config, logger *slog.Logger) *Reporter {
 	return r
 }
 
-// IsEnabled returns true if the reporter is configured and active.
 func (r *Reporter) IsEnabled() bool {
 	return r.cfg.Enabled && r.cfg.APIKey != ""
 }
@@ -218,7 +217,6 @@ func (r *Reporter) Stop() {
 	)
 }
 
-// GetMetrics returns the current reporter metrics.
 func (r *Reporter) GetMetrics() Metrics {
 	return Metrics{
 		ReportsTotal:   r.reportsTotal.Load(),

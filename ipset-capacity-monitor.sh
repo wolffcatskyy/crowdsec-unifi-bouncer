@@ -354,15 +354,6 @@ rotate_log() {
     fi
 }
 
-# Record a capacity event (called by other scripts)
-record_capacity_event() {
-    local count="${1:-1}"
-    init_state
-    increment_counter "decisions_dropped_total" "$count" >/dev/null
-    increment_counter "capacity_events_total" >/dev/null
-    update_counter "last_capacity_event" "$(date +%s)"
-}
-
 # Main
 case "${1:-}" in
     --watch)
@@ -373,10 +364,6 @@ case "${1:-}" in
         ;;
     --check)
         check_capacity
-        ;;
-    --record-dropped)
-        shift
-        record_capacity_event "${1:-1}"
         ;;
     --help|-h)
         cat << HELPEOF
@@ -390,7 +377,6 @@ Usage:
   $0 --watch      Continuous monitoring (for systemd)
   $0 --status     Show current capacity status and stats
   $0 --check      Check capacity and log warnings
-  $0 --record-dropped [N]  Record N dropped decisions (for external scripts)
 
 Environment variables:
   BOUNCER_DIR     Installation directory (default: /data/crowdsec-bouncer)

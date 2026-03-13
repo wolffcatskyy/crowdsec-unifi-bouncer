@@ -16,7 +16,6 @@ type Scorer struct {
 	config *config.ScoringConfig
 }
 
-// New creates a new Scorer with the given configuration.
 func New(cfg *config.ScoringConfig) *Scorer {
 	return &Scorer{
 		config: cfg,
@@ -75,10 +74,6 @@ func (s *Scorer) Score(d *lapi.Decision) int {
 // calculateTTLBonus returns bonus points based on remaining TTL.
 // Longer bans get more points, up to MaxBonus for bans >= MaxTTL.
 func (s *Scorer) calculateTTLBonus(duration time.Duration) int {
-	if duration <= 0 {
-		return 0
-	}
-
 	maxTTL := s.config.TTLScoring.MaxTTL
 	maxBonus := s.config.TTLScoring.MaxBonus
 
@@ -160,8 +155,6 @@ type Stats struct {
 	DroppedDecisions  int
 	MinScore          int
 	MaxScore          int
-	AvgScore          float64
-	ScoreDistribution map[string]int // scenario -> count (all decisions)
 
 	// Effectiveness metrics (v2.2.0)
 	OriginKept      map[string]int         // origin -> count of kept decisions
@@ -179,9 +172,8 @@ type Stats struct {
 // ScoreAndTruncateWithStats is like ScoreAndTruncate but also returns stats.
 func (s *Scorer) ScoreAndTruncateWithStats(decisions []lapi.Decision, maxDecisions int) ([]lapi.Decision, Stats) {
 	stats := Stats{
-		TotalDecisions:    len(decisions),
-		ScoreDistribution: make(map[string]int),
-		OriginKept:        make(map[string]int),
+		TotalDecisions: len(decisions),
+		OriginKept:     make(map[string]int),
 		OriginDropped:     make(map[string]int),
 		ScenarioKept:      make(map[string]int),
 		ScenarioDropped:   make(map[string]int),
@@ -211,15 +203,11 @@ func (s *Scorer) ScoreAndTruncateWithStats(decisions []lapi.Decision, maxDecisio
 		}
 	}
 
-	// Single pass over all sorted decisions: stats, distribution, buckets
-	totalScore := 0
+	// Single pass over all sorted decisions: stats and buckets
 	stats.MaxScore = sorted[0].Score
 	stats.MinScore = sorted[len(sorted)-1].Score
 
 	for _, d := range sorted {
-		totalScore += d.Score
-		stats.ScoreDistribution[d.Scenario]++
-
 		// Score buckets (cumulative: le=T counts all decisions with score <= T)
 		for _, threshold := range ScoreBucketThresholds {
 			if d.Score <= threshold {
@@ -227,7 +215,6 @@ func (s *Scorer) ScoreAndTruncateWithStats(decisions []lapi.Decision, maxDecisio
 			}
 		}
 	}
-	stats.AvgScore = float64(totalScore) / float64(len(sorted))
 
 	// Median score (sorted is descending)
 	mid := len(sorted) / 2

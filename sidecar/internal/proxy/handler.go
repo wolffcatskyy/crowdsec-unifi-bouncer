@@ -5,6 +5,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"io"
 	"log/slog"
 	"net/http"
 	"net/url"
@@ -30,19 +31,20 @@ type Handler struct {
 	passthroughHTTP *http.Client
 
 	// Cache
-	cacheMu     sync.RWMutex
-	cache       []lapi.Decision
-	cacheTime   time.Time
-	cacheStats  scorer.Stats
-	cacheHits   int64
-	cacheMisses int64
+	cacheMu    sync.RWMutex
+	cache      []lapi.Decision
+	cacheTime  time.Time
+	cacheStats scorer.Stats
 
-	// Metrics
-	metricsMu        sync.RWMutex
-	totalRequests    int64
-	failedRequests   int64
-	upstreamLatency  time.Duration
-	lastUpstreamCall time.Time
+	// Atomic counters (lock-free)
+	cacheHits    atomic.Int64
+	cacheMisses  atomic.Int64
+	totalRequests atomic.Int64
+	failedRequests atomic.Int64
+
+	// Metrics (protected by metricsMu)
+	metricsMu       sync.RWMutex
+	upstreamLatency time.Duration
 
 	// Effectiveness tracking
 	droppedIPs   map[string]struct{}
@@ -67,7 +69,7 @@ type Handler struct {
 func New(cfg *config.Config, logger *slog.Logger) *Handler {
 	return &Handler{
 		cfg:       cfg,
-		client:    lapi.NewClient(cfg.UpstreamLAPIURL, cfg.UpstreamLAPIKey, cfg.UpstreamTimeout),
+		client:    lapi.NewClient(cfg.UpstreamLAPIURL, cfg.UpstreamLAPIKey, cfg.UpstreamTimeout, logger),
 		scorer:    scorer.New(&cfg.Scoring),
 		logger:    logger,
 		startTime: time.Now(),
@@ -84,11 +86,8 @@ func New(cfg *config.Config, logger *slog.Logger) *Handler {
 	}
 }
 
-// ServeHTTP implements http.Handler.
 func (h *Handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
-	h.metricsMu.Lock()
-	h.totalRequests++
-	h.metricsMu.Unlock()
+	h.totalRequests.Add(1)
 
 	switch r.URL.Path {
 	case "/v1/decisions":
@@ -113,7 +112,6 @@ func (h *Handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	}
 }
 
-// handleDecisions handles GET /v1/decisions
 func (h *Handler) handleDecisions(w http.ResponseWriter, r *http.Request) {
 	if r.Method != http.MethodGet {
 		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
@@ -129,9 +127,7 @@ func (h *Handler) handleDecisions(w http.ResponseWriter, r *http.Request) {
 		decisions, stats, err = h.fetchAndScoreDecisions(ctx, r.URL.Query())
 		if err != nil {
 			h.logger.Error("failed to fetch decisions", "error", err)
-			h.metricsMu.Lock()
-			h.failedRequests++
-			h.metricsMu.Unlock()
+			h.failedRequests.Add(1)
 			http.Error(w, "failed to fetch decisions from upstream", http.StatusBadGateway)
 			return
 		}
@@ -165,7 +161,6 @@ func (h *Handler) handleDecisions(w http.ResponseWriter, r *http.Request) {
 	}
 }
 
-// handleDecisionsStream handles GET /v1/decisions/stream
 func (h *Handler) handleDecisionsStream(w http.ResponseWriter, r *http.Request) {
 	if r.Method != http.MethodGet {
 		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
@@ -179,16 +174,13 @@ func (h *Handler) handleDecisionsStream(w http.ResponseWriter, r *http.Request) 
 	stream, err := h.client.GetDecisionsStream(ctx, startup)
 	if err != nil {
 		h.logger.Error("failed to fetch decision stream", "error", err)
-		h.metricsMu.Lock()
-		h.failedRequests++
-		h.metricsMu.Unlock()
+		h.failedRequests.Add(1)
 		http.Error(w, "failed to fetch decisions from upstream", http.StatusBadGateway)
 		return
 	}
 
 	h.metricsMu.Lock()
 	h.upstreamLatency = time.Since(start)
-	h.lastUpstreamCall = time.Now()
 	h.metricsMu.Unlock()
 
 	if startup {
@@ -243,7 +235,6 @@ func (h *Handler) handleDecisionsStream(w http.ResponseWriter, r *http.Request) 
 	}
 }
 
-// handleHealth handles the health check endpoint.
 func (h *Handler) handleHealth(w http.ResponseWriter, r *http.Request) {
 	ctx, cancel := context.WithTimeout(r.Context(), 5*time.Second)
 	defer cancel()
@@ -270,17 +261,17 @@ func (h *Handler) handleHealth(w http.ResponseWriter, r *http.Request) {
 	json.NewEncoder(w).Encode(health)
 }
 
-// handleMetrics handles the metrics endpoint (Prometheus format).
 func (h *Handler) handleMetrics(w http.ResponseWriter, r *http.Request) {
+	totalReqs := h.totalRequests.Load()
+	failedReqs := h.failedRequests.Load()
+	cacheHits := h.cacheHits.Load()
+	cacheMisses := h.cacheMisses.Load()
+
 	h.metricsMu.RLock()
-	totalReqs := h.totalRequests
-	failedReqs := h.failedRequests
 	upstreamLat := h.upstreamLatency.Seconds()
 	h.metricsMu.RUnlock()
 
 	h.cacheMu.RLock()
-	cacheHits := h.cacheHits
-	cacheMisses := h.cacheMisses
 	cachedDecisions := len(h.cache)
 	cacheStats := h.cacheStats
 	h.cacheMu.RUnlock()
@@ -528,12 +519,7 @@ func (h *Handler) StopBackgroundChecks() {
 func (h *Handler) falseNegativeChecker(ctx context.Context) {
 	defer h.bgWg.Done()
 
-	interval := h.cfg.Effectiveness.FalseNegativeCheck.Interval
-	if interval <= 0 {
-		interval = 5 * time.Minute
-	}
-
-	ticker := time.NewTicker(interval)
+	ticker := time.NewTicker(h.cfg.Effectiveness.FalseNegativeCheck.Interval)
 	defer ticker.Stop()
 
 	for {
@@ -562,13 +548,8 @@ func (h *Handler) runFalseNegativeCheck(ctx context.Context) {
 	}
 
 	// Query LAPI for recent alerts
-	lookback := h.cfg.Effectiveness.FalseNegativeCheck.Lookback
-	if lookback <= 0 {
-		lookback = 15 * time.Minute
-	}
-
 	params := url.Values{}
-	params.Set("since", lookback.String())
+	params.Set("since", h.cfg.Effectiveness.FalseNegativeCheck.Lookback.String())
 
 	alerts, err := h.client.GetAlerts(ctx, params)
 	if err != nil {
@@ -612,7 +593,6 @@ func (h *Handler) runFalseNegativeCheck(ctx context.Context) {
 	h.falseNegativeLastCheck.Store(time.Now().Unix())
 }
 
-// proxyPassthrough proxies requests directly to upstream without modification.
 func (h *Handler) proxyPassthrough(w http.ResponseWriter, r *http.Request) {
 	h.logger.Debug("proxying request to upstream", "path", r.URL.Path)
 
@@ -645,16 +625,7 @@ func (h *Handler) proxyPassthrough(w http.ResponseWriter, r *http.Request) {
 	}
 
 	w.WriteHeader(resp.StatusCode)
-	buf := make([]byte, 32*1024)
-	for {
-		n, err := resp.Body.Read(buf)
-		if n > 0 {
-			w.Write(buf[:n])
-		}
-		if err != nil {
-			break
-		}
-	}
+	io.Copy(w, resp.Body)
 }
 
 // getCachedDecisions returns cached decisions if still valid.
@@ -666,9 +637,7 @@ func (h *Handler) getCachedDecisions() ([]lapi.Decision, scorer.Stats, bool) {
 	h.cacheMu.RUnlock()
 
 	if cache != nil && time.Since(cacheTime) < h.cfg.CacheTTL {
-		h.cacheMu.Lock()
-		h.cacheHits++
-		h.cacheMu.Unlock()
+		h.cacheHits.Add(1)
 		return cache, cacheStats, true
 	}
 
@@ -681,8 +650,9 @@ func (h *Handler) setCachedDecisions(decisions []lapi.Decision, stats scorer.Sta
 	h.cache = decisions
 	h.cacheTime = time.Now()
 	h.cacheStats = stats
-	h.cacheMisses++
 	h.cacheMu.Unlock()
+
+	h.cacheMisses.Add(1)
 
 	// Store dropped IPs for false-negative checking
 	h.droppedIPsMu.Lock()
@@ -700,7 +670,6 @@ func (h *Handler) fetchAndScoreDecisions(ctx context.Context, query map[string][
 
 	h.metricsMu.Lock()
 	h.upstreamLatency = time.Since(start)
-	h.lastUpstreamCall = time.Now()
 	h.metricsMu.Unlock()
 
 	result, stats := h.scorer.ScoreAndTruncateWithStats(decisions, h.cfg.MaxDecisions)

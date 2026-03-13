@@ -325,7 +325,8 @@ if [[ "${BASH_SOURCE[0]}" == "${0}" ]]; then
     done
 fi
 
-# Export variables when sourced
+# Export variables when sourced (skip if running directly — already handled above)
+if [[ "${BASH_SOURCE[0]}" != "${0}" ]]; then
 DETECTED_MODEL=$(detect_device_model)
 DETECTED_NORMALIZED=$(normalize_model "$DETECTED_MODEL")
 SAFE_MAXELEM=$(get_safe_maxelem "$DETECTED_MODEL")
@@ -348,3 +349,4 @@ RECOMMENDED_SIDECAR_CAP=$((FINAL_MAXELEM > 2000 ? FINAL_MAXELEM - 2000 : 0))
 
 export DETECTED_MODEL DETECTED_NORMALIZED SAFE_MAXELEM DEVICE_TIER_NAME
 export FINAL_MAXELEM UNSUPPORTED_DEVICE RECOMMENDED_SIDECAR_CAP
+fi

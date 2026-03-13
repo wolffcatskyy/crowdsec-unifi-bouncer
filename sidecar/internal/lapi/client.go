@@ -6,6 +6,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"io"
+	"log/slog"
 	"net/http"
 	"net/url"
 	"time"
@@ -32,17 +33,22 @@ type Decision struct {
 	Score int `json:"-"`
 }
 
-// Client is an HTTP client for the CrowdSec LAPI.
 type Client struct {
 	baseURL    string
 	apiKey     string
 	httpClient *http.Client
+	logger     *slog.Logger
 }
 
-// NewClient creates a new LAPI client with the specified timeout.
-func NewClient(baseURL, apiKey string, timeout time.Duration) *Client {
+func NewClient(baseURL, apiKey string, timeout time.Duration, optLogger ...*slog.Logger) *Client {
 	if timeout <= 0 {
 		timeout = 120 * time.Second // default for large decision sets
+	}
+	var logger *slog.Logger
+	if len(optLogger) > 0 && optLogger[0] != nil {
+		logger = optLogger[0]
+	} else {
+		logger = slog.Default()
 	}
 	return &Client{
 		baseURL: baseURL,
@@ -50,10 +56,10 @@ func NewClient(baseURL, apiKey string, timeout time.Duration) *Client {
 		httpClient: &http.Client{
 			Timeout: timeout,
 		},
+		logger: logger,
 	}
 }
 
-// GetDecisions fetches all active decisions from the LAPI.
 func (c *Client) GetDecisions(ctx context.Context, queryParams url.Values) ([]Decision, error) {
 	reqURL := c.baseURL + "/v1/decisions"
 	if len(queryParams) > 0 {
@@ -97,7 +103,15 @@ func (c *Client) GetDecisions(ctx context.Context, queryParams url.Values) ([]De
 	// Parse durations and created_at for all decisions
 	for i := range decisions {
 		if decisions[i].Duration != "" {
-			decisions[i].ParsedDuration, _ = parseDuration(decisions[i].Duration)
+			var err error
+			decisions[i].ParsedDuration, err = time.ParseDuration(decisions[i].Duration)
+			if err != nil {
+				c.logger.Debug("failed to parse decision duration",
+					"id", decisions[i].ID,
+					"duration", decisions[i].Duration,
+					"error", err,
+				)
+			}
 		}
 		if decisions[i].CreatedAt != "" {
 			decisions[i].ParsedCreated, _ = parseCreatedAt(decisions[i].CreatedAt)
@@ -146,7 +160,15 @@ func (c *Client) GetDecisionsStream(ctx context.Context, startup bool) (*Decisio
 	// Parse durations and created_at for new decisions
 	for i := range stream.New {
 		if stream.New[i].Duration != "" {
-			stream.New[i].ParsedDuration, _ = parseDuration(stream.New[i].Duration)
+			var err error
+			stream.New[i].ParsedDuration, err = time.ParseDuration(stream.New[i].Duration)
+			if err != nil {
+				c.logger.Debug("failed to parse decision duration",
+					"id", stream.New[i].ID,
+					"duration", stream.New[i].Duration,
+					"error", err,
+				)
+			}
 		}
 		if stream.New[i].CreatedAt != "" {
 			stream.New[i].ParsedCreated, _ = parseCreatedAt(stream.New[i].CreatedAt)
@@ -217,12 +239,6 @@ func (c *Client) GetAlerts(ctx context.Context, params url.Values) ([]Alert, err
 	}
 
 	return alerts, nil
-}
-
-// parseDuration parses CrowdSec duration format (e.g., "4h", "24h", "168h").
-func parseDuration(s string) (time.Duration, error) {
-	// CrowdSec uses Go-style durations, but may also use "s", "m", "h" suffixes
-	return time.ParseDuration(s)
 }
 
 // parseCreatedAt parses the created_at timestamp from LAPI responses.
