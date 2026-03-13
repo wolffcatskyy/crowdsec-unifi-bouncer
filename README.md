@@ -520,6 +520,8 @@ The reporter enforces a daily limit (default: 100) that resets every 24 hours. W
 | `abuseipdb_reports_total` | Counter | Total reports by status (`success`, `failed`, `skipped`) |
 | `abuseipdb_reports_queued` | Counter | Reports queued for async sending |
 
+For a full explainer including what AbuseIPDB is, why reporting helps, API tier options, privacy details, and troubleshooting, see **[docs/abuseipdb.md](docs/abuseipdb.md)**.
+
 ## Capacity Monitoring
 
 When ipset reaches capacity, the bouncer logs errors and new IPs can't be added. The `ipset-capacity-monitor.sh` script detects this and exposes metrics:
