@@ -283,8 +283,6 @@ abuseipdb:
 
 Reports include the CrowdSec scenario name and ban duration in the comment field.
 
-For a full explainer including what AbuseIPDB is, how the community database works, API tier options, privacy details, and troubleshooting, see **[docs/abuseipdb.md](../docs/abuseipdb.md)**.
-
 ---
 
 ## Endpoints
