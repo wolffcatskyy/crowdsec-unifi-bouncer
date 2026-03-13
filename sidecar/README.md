@@ -244,7 +244,7 @@ effectiveness:
 | `effectiveness.false_negative_check.interval` | duration | `5m` | How often to check for false negatives. |
 | `effectiveness.false_negative_check.lookback` | duration | `15m` | How far back to look for local alerts that match dropped IPs. |
 
-### AbuseIPDB Section (v2.3.0)
+### AbuseIPDB Section (v2.4.0)
 
 Optional integration to report banned IPs to [AbuseIPDB](https://www.abuseipdb.com/), contributing back to the broader threat intelligence community.
 
@@ -489,7 +489,7 @@ All metrics are exposed at the `/metrics` endpoint in Prometheus text format.
 | `crowdsec_sidecar_false_negatives_total` | counter | | IPs that were dropped by scoring but later attacked locally. Should always be 0. |
 | `crowdsec_sidecar_false_negative_check_time` | gauge | | Unix timestamp of the last false-negative check. |
 
-### AbuseIPDB Metrics (v2.3.0)
+### AbuseIPDB Metrics (v2.4.0)
 
 These metrics are only emitted when AbuseIPDB reporting is enabled.
 
