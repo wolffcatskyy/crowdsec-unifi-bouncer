@@ -11,6 +11,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/wolffcatskyy/crowdsec-unifi-bouncer/sidecar/internal/abuseipdb"
 	"github.com/wolffcatskyy/crowdsec-unifi-bouncer/sidecar/internal/config"
 	"github.com/wolffcatskyy/crowdsec-unifi-bouncer/sidecar/internal/lapi"
 	"github.com/wolffcatskyy/crowdsec-unifi-bouncer/sidecar/internal/scorer"
@@ -287,6 +288,125 @@ func TestHandler_BackgroundChecksLifecycle(t *testing.T) {
 		// OK
 	case <-time.After(2 * time.Second):
 		t.Fatal("StopBackgroundChecks timed out")
+	}
+}
+
+func TestHandler_AbuseIPDBReportsOnIncrementalStream(t *testing.T) {
+	var abuseReports int32
+
+	// Mock AbuseIPDB server
+	abuseServer := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		abuseReports++
+		w.Header().Set("Content-Type", "application/json")
+		w.Write([]byte(`{"data":{"ipAddress":"` + r.FormValue("ip") + `","abuseConfidenceScore":100}}`))
+	}))
+	defer abuseServer.Close()
+
+	// Mock LAPI server
+	firstCall := true
+	lapiServer := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch r.URL.Path {
+		case "/v1/decisions/stream":
+			w.Header().Set("Content-Type", "application/json")
+			if firstCall {
+				// Startup: return existing decisions (should NOT report)
+				firstCall = false
+				json.NewEncoder(w).Encode(lapi.DecisionStream{
+					New: []lapi.Decision{
+						{ID: 1, Origin: "crowdsec", Value: "1.1.1.1", Type: "ban", Scope: "ip", Scenario: "ssh-bf"},
+					},
+				})
+			} else {
+				// Incremental: new decisions (SHOULD report local, skip CAPI)
+				json.NewEncoder(w).Encode(lapi.DecisionStream{
+					New: []lapi.Decision{
+						{ID: 2, Origin: "crowdsec", Value: "2.2.2.2", Type: "ban", Scope: "ip", Scenario: "ssh-bf"},
+						{ID: 3, Origin: "CAPI", Value: "3.3.3.3", Type: "ban", Scope: "ip", Scenario: "ssh-bf"},
+					},
+				})
+			}
+		case "/health":
+			w.WriteHeader(http.StatusOK)
+		default:
+			w.WriteHeader(http.StatusNotFound)
+		}
+	}))
+	defer lapiServer.Close()
+
+	cfg := testConfig(lapiServer.URL)
+	cfg.AbuseIPDB = abuseipdb.Config{
+		Enabled:    true,
+		APIKey:     "test-abuse-key",
+		APIURL:     abuseServer.URL,
+		DailyLimit: 100,
+	}
+	handler := New(cfg, testLogger())
+
+	// First call: startup=true (should NOT report to AbuseIPDB)
+	req := httptest.NewRequest("GET", "/v1/decisions/stream?startup=true", nil)
+	rr := httptest.NewRecorder()
+	handler.ServeHTTP(rr, req)
+	if rr.Code != http.StatusOK {
+		t.Fatalf("startup stream request failed: %d", rr.Code)
+	}
+
+	// Second call: incremental (should report local decisions only)
+	req = httptest.NewRequest("GET", "/v1/decisions/stream", nil)
+	rr = httptest.NewRecorder()
+	handler.ServeHTTP(rr, req)
+	if rr.Code != http.StatusOK {
+		t.Fatalf("incremental stream request failed: %d", rr.Code)
+	}
+
+	// Stop to drain report queue
+	handler.StopBackgroundChecks()
+
+	// Only the local "crowdsec" origin decision should be reported (CAPI is skipped)
+	if abuseReports != 1 {
+		t.Errorf("expected 1 AbuseIPDB report (local only), got %d", abuseReports)
+	}
+}
+
+func TestHandler_AbuseIPDBMetricsInOutput(t *testing.T) {
+	abuseServer := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		w.Write([]byte(`{"data":{"ipAddress":"1.1.1.1","abuseConfidenceScore":100}}`))
+	}))
+	defer abuseServer.Close()
+
+	lapiServer := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(http.StatusOK)
+	}))
+	defer lapiServer.Close()
+
+	cfg := testConfig(lapiServer.URL)
+	cfg.AbuseIPDB = abuseipdb.Config{
+		Enabled:    true,
+		APIKey:     "test-key",
+		APIURL:     abuseServer.URL,
+		DailyLimit: 100,
+	}
+	handler := New(cfg, testLogger())
+	defer handler.StopBackgroundChecks()
+
+	// Fetch metrics
+	req := httptest.NewRequest("GET", "/metrics", nil)
+	rr := httptest.NewRecorder()
+	handler.ServeHTTP(rr, req)
+
+	body := rr.Body.String()
+
+	expectedMetrics := []string{
+		"abuseipdb_reports_total{status=\"success\"}",
+		"abuseipdb_reports_total{status=\"failed\"}",
+		"abuseipdb_reports_total{status=\"skipped\"}",
+		"abuseipdb_reports_queued",
+	}
+
+	for _, metric := range expectedMetrics {
+		if !strings.Contains(body, metric) {
+			t.Errorf("metrics output missing %q", metric)
+		}
 	}
 }
 

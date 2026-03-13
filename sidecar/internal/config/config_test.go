@@ -415,6 +415,72 @@ func TestScoringConfig_GetCIDRBonus(t *testing.T) {
 	}
 }
 
+func TestLoad_AbuseIPDBConfig(t *testing.T) {
+	tmpDir := t.TempDir()
+	configPath := filepath.Join(tmpDir, "config.yaml")
+
+	configContent := `
+upstream_lapi_url: "http://localhost:8080"
+upstream_lapi_key: "test-api-key"
+
+abuseipdb:
+  enabled: true
+  api_key: "test-abuse-key"
+  daily_limit: 3000
+`
+
+	if err := os.WriteFile(configPath, []byte(configContent), 0644); err != nil {
+		t.Fatalf("Failed to write test config: %v", err)
+	}
+
+	cfg, err := Load(configPath)
+	if err != nil {
+		t.Fatalf("Load() error = %v", err)
+	}
+
+	if !cfg.AbuseIPDB.Enabled {
+		t.Error("AbuseIPDB.Enabled should be true")
+	}
+	if cfg.AbuseIPDB.APIKey != "test-abuse-key" {
+		t.Errorf("AbuseIPDB.APIKey = %v, want test-abuse-key", cfg.AbuseIPDB.APIKey)
+	}
+	if cfg.AbuseIPDB.DailyLimit != 3000 {
+		t.Errorf("AbuseIPDB.DailyLimit = %v, want 3000", cfg.AbuseIPDB.DailyLimit)
+	}
+}
+
+func TestLoad_AbuseIPDBEnvOverrides(t *testing.T) {
+	tmpDir := t.TempDir()
+	configPath := filepath.Join(tmpDir, "config.yaml")
+
+	configContent := `
+upstream_lapi_url: "http://localhost:8080"
+upstream_lapi_key: "test-api-key"
+`
+
+	if err := os.WriteFile(configPath, []byte(configContent), 0644); err != nil {
+		t.Fatalf("Failed to write test config: %v", err)
+	}
+
+	// Set environment variables
+	os.Setenv("ABUSEIPDB_API_KEY", "env-abuse-key")
+	os.Setenv("ABUSEIPDB_REPORT_ENABLED", "true")
+	defer os.Unsetenv("ABUSEIPDB_API_KEY")
+	defer os.Unsetenv("ABUSEIPDB_REPORT_ENABLED")
+
+	cfg, err := Load(configPath)
+	if err != nil {
+		t.Fatalf("Load() error = %v", err)
+	}
+
+	if !cfg.AbuseIPDB.Enabled {
+		t.Error("AbuseIPDB.Enabled should be true from env")
+	}
+	if cfg.AbuseIPDB.APIKey != "env-abuse-key" {
+		t.Errorf("AbuseIPDB.APIKey = %v, want env-abuse-key", cfg.AbuseIPDB.APIKey)
+	}
+}
+
 func TestScoringConfig_GetScenarioMultiplier(t *testing.T) {
 	cfg1 := &ScoringConfig{ScenarioMultiplier: 3.0}
 	if got := cfg1.GetScenarioMultiplier(); got != 3.0 {

@@ -33,6 +33,9 @@ services:
       # EVICTION_MODE controls what happens when CAPI decisions exceed max_decisions
       # between full syncs. Options: "cap" (default, drop new) or "evict" (replace oldest)
       # - EVICTION_MODE=cap
+      # AbuseIPDB reporting (optional). Set both to enable.
+      # - ABUSEIPDB_API_KEY=your_api_key_here
+      # - ABUSEIPDB_REPORT_ENABLED=true
     depends_on:
       - crowdsec
     healthcheck:

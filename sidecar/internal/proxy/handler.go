@@ -13,6 +13,7 @@ import (
 	"sync/atomic"
 	"time"
 
+	"github.com/wolffcatskyy/crowdsec-unifi-bouncer/sidecar/internal/abuseipdb"
 	"github.com/wolffcatskyy/crowdsec-unifi-bouncer/sidecar/internal/config"
 	"github.com/wolffcatskyy/crowdsec-unifi-bouncer/sidecar/internal/lapi"
 	"github.com/wolffcatskyy/crowdsec-unifi-bouncer/sidecar/internal/scorer"
@@ -54,6 +55,9 @@ type Handler struct {
 	// Stream-aware decision capping
 	streamTracker *tracker.StreamTracker
 
+	// AbuseIPDB reporter
+	abuseReporter *abuseipdb.Reporter
+
 	// Background checks
 	bgCancel context.CancelFunc
 	bgWg     sync.WaitGroup
@@ -76,6 +80,7 @@ func New(cfg *config.Config, logger *slog.Logger) *Handler {
 			},
 		},
 		streamTracker: tracker.New(cfg.MaxDecisions, tracker.EvictionMode(cfg.EvictionMode), logger),
+		abuseReporter: abuseipdb.New(cfg.AbuseIPDB, logger),
 	}
 }
 
@@ -210,6 +215,14 @@ func (h *Handler) handleDecisionsStream(w http.ResponseWriter, r *http.Request) 
 		// The tracker enforces cumulative CAPI cap between full syncs
 		// while always passing through local decisions.
 		stream.New = h.streamTracker.FilterStreamDecisions(stream)
+
+		// Report new incremental decisions to AbuseIPDB (non-startup only).
+		// Startup decisions are existing bans, not new detections.
+		if h.abuseReporter.IsEnabled() {
+			for _, d := range stream.New {
+				h.abuseReporter.ReportDecision(d)
+			}
+		}
 	}
 
 	// Log with tracker metrics for observability
@@ -422,6 +435,22 @@ func (h *Handler) handleMetrics(w http.ResponseWriter, r *http.Request) {
 		evictionModeVal = 1
 	}
 	fmt.Fprintf(w, "crowdsec_sidecar_stream_eviction_mode %d\n", evictionModeVal)
+
+	// --- AbuseIPDB reporting metrics ---
+
+	if h.abuseReporter.IsEnabled() {
+		am := h.abuseReporter.GetMetrics()
+
+		fmt.Fprintf(w, "# HELP abuseipdb_reports_total Total AbuseIPDB reports attempted\n")
+		fmt.Fprintf(w, "# TYPE abuseipdb_reports_total counter\n")
+		fmt.Fprintf(w, "abuseipdb_reports_total{status=\"success\"} %d\n", am.ReportsSuccess)
+		fmt.Fprintf(w, "abuseipdb_reports_total{status=\"failed\"} %d\n", am.ReportsFailed)
+		fmt.Fprintf(w, "abuseipdb_reports_total{status=\"skipped\"} %d\n", am.ReportsSkipped)
+
+		fmt.Fprintf(w, "# HELP abuseipdb_reports_queued Total AbuseIPDB reports queued for sending\n")
+		fmt.Fprintf(w, "# TYPE abuseipdb_reports_queued counter\n")
+		fmt.Fprintf(w, "abuseipdb_reports_queued %d\n", am.ReportsTotal)
+	}
 }
 
 // writeTopNMetric writes a Prometheus metric for the top N entries of a map,
@@ -488,6 +517,11 @@ func (h *Handler) StopBackgroundChecks() {
 		h.bgCancel()
 	}
 	h.bgWg.Wait()
+
+	// Stop the AbuseIPDB reporter (drains pending reports).
+	if h.abuseReporter != nil {
+		h.abuseReporter.Stop()
+	}
 }
 
 // falseNegativeChecker periodically checks for false negatives.
