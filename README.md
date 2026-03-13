@@ -459,9 +459,7 @@ For full sidecar documentation, see [sidecar/README.md](sidecar/README.md).
 
 ## AbuseIPDB Reporting (Optional)
 
-[AbuseIPDB](https://www.abuseipdb.com) is a community-driven database of malicious IPs. Network operators report attacks; others check IPs before allowing access. When enabled, the sidecar automatically reports locally-banned IPs to AbuseIPDB — contributing your CrowdSec detections to collective threat intelligence. Free tier: 100 reports/day.
-
-The sidecar can automatically report locally-banned IPs to [AbuseIPDB](https://www.abuseipdb.com/), contributing your CrowdSec detections back to the broader threat intelligence community.
+**New to AbuseIPDB?** [AbuseIPDB](https://www.abuseipdb.com) is a free, community-driven database of malicious IPs where users report attacks and check IP reputations. Get started at [abuseipdb.com](https://www.abuseipdb.com).
 
 ### How It Works
 
