@@ -64,6 +64,7 @@ func main() {
 		"max_decisions", cfg.MaxDecisions,
 		"eviction_mode", cfg.EvictionMode,
 		"cache_ttl", cfg.CacheTTL.String(),
+		"abuseipdb_enabled", cfg.AbuseIPDB.Enabled && cfg.AbuseIPDB.APIKey != "",
 	)
 
 	// Create handler

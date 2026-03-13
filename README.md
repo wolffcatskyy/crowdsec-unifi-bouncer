@@ -31,6 +31,7 @@ Drop-in install of the official [CrowdSec firewall bouncer](https://github.com/c
 - **Stream-aware capping** (v2.3.0) — prevents ipset overflow on high-churn CAPI streams with configurable eviction
 - **Prometheus metrics** — monitor ipset fill ratio, dropped decisions, and sidecar effectiveness
 - **Grafana dashboard** — included, ready to import
+- **AbuseIPDB reporting** (v2.4.0) — automatically reports locally-banned IPs to AbuseIPDB, contributing to community threat intelligence
 - **Lightweight** — 15 MB RAM for the bouncer, 8 MB for the sidecar
 
 ## Table of Contents
@@ -42,6 +43,7 @@ Drop-in install of the official [CrowdSec firewall bouncer](https://github.com/c
 - [Installation](#installation)
 - [Configuration](#configuration)
 - [Sidecar Proxy](#sidecar-proxy-optional-but-recommended)
+- [AbuseIPDB Reporting](#abuseipdb-reporting-optional)
 - [Prometheus Metrics](#prometheus-metrics)
 - [Troubleshooting](#troubleshooting)
 - [Migration from v1.x](#migration-from-python-bouncer)
@@ -455,6 +457,69 @@ curl http://YOUR_SIDECAR_HOST:8084/metrics
 
 For full sidecar documentation, see [sidecar/README.md](sidecar/README.md).
 
+## AbuseIPDB Reporting (Optional)
+
+The sidecar can automatically report locally-banned IPs to [AbuseIPDB](https://www.abuseipdb.com/), contributing your CrowdSec detections back to the broader threat intelligence community.
+
+### How It Works
+
+When the sidecar processes new ban decisions from your local CrowdSec instance, it asynchronously reports each banned IP to AbuseIPDB with the appropriate abuse category and a comment describing the CrowdSec scenario that triggered the ban. Reporting is fire-and-forget -- it never blocks or affects decision processing.
+
+**Smart filtering prevents circular reporting:**
+- Only local CrowdSec detections and manual `cscli` bans are reported
+- CAPI (community blocklist) decisions are skipped -- they already exist in threat intel
+- Blocklist-import decisions are skipped -- avoids re-reporting IPs from other feeds
+- Only individual IP bans are reported (not CIDR ranges or captcha decisions)
+
+### Configuration
+
+Enable via environment variables in your sidecar deployment:
+
+```yaml
+# docker-compose.yaml
+environment:
+  - ABUSEIPDB_API_KEY=your_api_key_here
+  - ABUSEIPDB_REPORT_ENABLED=true
+```
+
+Or in the sidecar `config.yaml`:
+
+```yaml
+abuseipdb:
+  enabled: true
+  api_key: "your_api_key_here"
+  daily_limit: 100  # Free tier: 100/day, Premium: 3000/day
+```
+
+| Setting | Env Var | Default | Description |
+|---------|---------|---------|-------------|
+| `abuseipdb.enabled` | `ABUSEIPDB_REPORT_ENABLED` | `false` | Enable reporting |
+| `abuseipdb.api_key` | `ABUSEIPDB_API_KEY` | -- | API key from [abuseipdb.com/account/api](https://www.abuseipdb.com/account/api) |
+| `abuseipdb.daily_limit` | -- | `100` | Max reports per 24h window |
+
+### Scenario Category Mapping
+
+CrowdSec scenarios are automatically mapped to AbuseIPDB abuse categories:
+
+| CrowdSec Scenario | AbuseIPDB Categories |
+|--------------------|----------------------|
+| SSH attacks (`ssh-bf`, `ssh-slow-bf`, etc.) | 22 (SSH), 18 (Brute-Force) |
+| Telnet attacks | 23 (Telnet), 18 (Brute-Force) |
+| HTTP attacks (`http-*`) | 21 (Web App Attack) |
+| SMB/FTP brute force | 18 (Brute-Force) |
+| Other scenarios | 14 (Port Scan) |
+
+### Rate Limits
+
+The reporter enforces a daily limit (default: 100) that resets every 24 hours. When the limit is reached, additional reports are silently skipped until the window resets. AbuseIPDB API 429 responses are also handled gracefully.
+
+### Prometheus Metrics
+
+| Metric | Type | Description |
+|--------|------|-------------|
+| `abuseipdb_reports_total` | Counter | Total reports by status (`success`, `failed`, `skipped`) |
+| `abuseipdb_reports_queued` | Counter | Reports queued for async sending |
+
 ## Capacity Monitoring
 
 When ipset reaches capacity, the bouncer logs errors and new IPs can't be added. The `ipset-capacity-monitor.sh` script detects this and exposes metrics:
@@ -620,6 +685,8 @@ MIT -- see [LICENSE](LICENSE)
 
 <details>
 <summary><strong>Changelog Highlights</strong></summary>
+
+**v2.4.0** (unreleased) -- AbuseIPDB reporting. Automatically reports locally-banned IPs to AbuseIPDB with scenario-to-category mapping, daily rate limiting, and smart origin filtering. Fire-and-forget, never affects bouncer operation.
 
 **v2.3.0** -- Stream-aware decision capping. `MAX_DECISIONS` and `EVICTION_MODE` control CAPI decision limits. Local decisions always pass through.
 

@@ -244,6 +244,45 @@ effectiveness:
 | `effectiveness.false_negative_check.interval` | duration | `5m` | How often to check for false negatives. |
 | `effectiveness.false_negative_check.lookback` | duration | `15m` | How far back to look for local alerts that match dropped IPs. |
 
+### AbuseIPDB Section (v2.3.0)
+
+Optional integration to report banned IPs to [AbuseIPDB](https://www.abuseipdb.com/), contributing back to the broader threat intelligence community.
+
+```yaml
+abuseipdb:
+  enabled: true
+  api_key: "YOUR_ABUSEIPDB_API_KEY"
+  daily_limit: 100
+```
+
+| Field | Type | Default | Description |
+|-------|------|---------|-------------|
+| `abuseipdb.enabled` | bool | `false` | Enable AbuseIPDB reporting. Also settable via `ABUSEIPDB_REPORT_ENABLED` env var. |
+| `abuseipdb.api_key` | string | | AbuseIPDB API key. Also settable via `ABUSEIPDB_API_KEY` env var. Get one at [abuseipdb.com/account/api](https://www.abuseipdb.com/account/api). |
+| `abuseipdb.daily_limit` | int | `100` | Maximum reports per 24-hour window. Free tier: 100/day, Premium: 3,000/day. |
+
+**What gets reported:**
+- Only NEW incremental decisions (not startup/full-sync existing bans)
+- Only local detections (`crowdsec`, `cscli` origins)
+- Only `ban` type decisions (not captcha/throttle)
+- Only individual IPs (not CIDR ranges)
+
+**What gets skipped (to avoid circular reporting):**
+- CAPI decisions (already in community threat intel)
+- Blocklist-import decisions (imported from other feeds)
+
+**Scenario-to-category mapping:**
+
+| CrowdSec Scenario | AbuseIPDB Categories |
+|-------------------|---------------------|
+| `*ssh*` | 22 (SSH), 18 (Brute Force) |
+| `*telnet*` | 23 (Telnet), 18 (Brute Force) |
+| `*http*` | 21 (Web App Attack) |
+| `*smb*`, `*ftp*` | 18 (Brute Force) |
+| Default/unknown | 14 (Port Scan) |
+
+Reports include the CrowdSec scenario name and ban duration in the comment field.
+
 ---
 
 ## Endpoints
@@ -450,6 +489,15 @@ All metrics are exposed at the `/metrics` endpoint in Prometheus text format.
 | `crowdsec_sidecar_false_negatives_total` | counter | | IPs that were dropped by scoring but later attacked locally. Should always be 0. |
 | `crowdsec_sidecar_false_negative_check_time` | gauge | | Unix timestamp of the last false-negative check. |
 
+### AbuseIPDB Metrics (v2.3.0)
+
+These metrics are only emitted when AbuseIPDB reporting is enabled.
+
+| Metric | Type | Labels | Description |
+|--------|------|--------|-------------|
+| `abuseipdb_reports_total` | counter | `status` | Total AbuseIPDB reports by status: `success`, `failed`, `skipped`. |
+| `abuseipdb_reports_queued` | counter | | Total reports queued for async sending. |
+
 ### Example Prometheus Scrape Config
 
 ```yaml
@@ -518,6 +566,8 @@ make fmt
 sidecar/
   cmd/sidecar/main.go          # Entry point, server setup, graceful shutdown
   internal/
+    abuseipdb/reporter.go       # AbuseIPDB report client (async, rate-limited)
+    abuseipdb/reporter_test.go  # AbuseIPDB reporter tests
     config/config.go            # YAML config loading, validation, defaults
     config/config_test.go       # Config loading and scoring config tests
     lapi/client.go              # HTTP client for CrowdSec LAPI (decisions + alerts)
@@ -526,6 +576,8 @@ sidecar/
     proxy/handler_test.go       # Handler tests (metrics output, false-negative detection)
     scorer/scorer.go            # Decision scoring, sorting, and effectiveness stats
     scorer/scorer_test.go       # Scoring algorithm and effectiveness metrics tests
+    tracker/tracker.go          # Stream-aware decision capping
+    tracker/tracker_test.go     # Stream tracker tests
   config.yaml.example           # Annotated example configuration
   docker-compose.yaml           # Reference compose file
   Dockerfile                    # Multi-stage Docker build
