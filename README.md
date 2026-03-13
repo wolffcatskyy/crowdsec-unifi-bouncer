@@ -74,7 +74,7 @@ ssh root@YOUR_UNIFI_IP
 curl -sSL https://raw.githubusercontent.com/wolffcatskyy/crowdsec-unifi-bouncer/main/bootstrap.sh | bash
 
 # 3. Configure — set your LAPI address and API key
-nano /data/crowdsec-bouncer/crowdsec-firewall-bouncer.yaml
+$EDITOR /data/crowdsec-bouncer/crowdsec-firewall-bouncer.yaml
 
 # 4. Start
 systemctl start crowdsec-firewall-bouncer
@@ -270,7 +270,7 @@ cd /tmp && bash install.sh
 ## Configuration
 
 ```bash
-nano /data/crowdsec-bouncer/crowdsec-firewall-bouncer.yaml
+$EDITOR /data/crowdsec-bouncer/crowdsec-firewall-bouncer.yaml
 ```
 
 **Critical settings:**
