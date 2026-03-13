@@ -10,7 +10,7 @@
 Drop-in install of the official [CrowdSec firewall bouncer](https://github.com/crowdsecurity/cs-firewall-bouncer) on UniFi OS devices — with persistence that survives firmware updates, reboots, and controller reprovisioning. Includes an intelligent sidecar proxy that scores and prioritizes threats when you have more decisions than your device can hold.
 
 > [!TIP]
-> **v2.4.0 Released** — AbuseIPDB reporting is now built into the sidecar. Automatically report locally-banned IPs to AbuseIPDB, contributing your CrowdSec detections to community threat intelligence. See [AbuseIPDB Reporting](#abuseipdb-reporting-optional) to enable it. [Release notes](https://github.com/wolffcatskyy/crowdsec-unifi-bouncer/releases/tag/v2.4.0)
+> **v2.4.0 Released** — AbuseIPDB reporting is now built into the sidecar. Automatically report locally-banned IPs to AbuseIPDB, contributing your CrowdSec detections to community threat intelligence. See [AbuseIPDB Reporting](docs/abuseipdb.md) to enable it. [Release notes](https://github.com/wolffcatskyy/crowdsec-unifi-bouncer/releases/tag/v2.4.0)
 
 > [!CAUTION]
 > **Beware of impostor repositories.** The official CrowdSec UniFi Bouncer is hosted at [`wolffcatskyy/crowdsec-unifi-bouncer`](https://github.com/wolffcatskyy/crowdsec-unifi-bouncer). We do **not** distribute ZIP file downloads or executable installers. If you see a repo offering "one-click downloads" of this project, it may contain malware. Always install via the official instructions below.
@@ -38,14 +38,14 @@ Drop-in install of the official [CrowdSec firewall bouncer](https://github.com/c
 
 - [The Problem](#the-problem)
 - [Quick Start](#quick-start)
-- [Device Compatibility](#device-compatibility--defaults)
-- [Architecture](#architecture)
+- [Architecture](docs/architecture.md)
+- [Device Compatibility](docs/device-compatibility.md)
 - [Installation](#installation)
-- [Configuration](#configuration)
-- [Sidecar Proxy](#sidecar-proxy-optional-but-recommended)
-- [AbuseIPDB Reporting](#abuseipdb-reporting-optional)
-- [Prometheus Metrics](#prometheus-metrics)
-- [Troubleshooting](#troubleshooting)
+- [Configuration](docs/configuration.md)
+- [Sidecar Proxy](docs/sidecar.md)
+- [AbuseIPDB Reporting](docs/abuseipdb.md)
+- [Prometheus Metrics](docs/metrics.md)
+- [Troubleshooting](docs/troubleshooting.md)
 - [Migration from v1.x](#migration-from-python-bouncer)
 - [Related Projects](#complete-unifi--crowdsec-suite)
 - [Contributing](#contributing)
@@ -74,7 +74,7 @@ ssh root@YOUR_UNIFI_IP
 curl -sSL https://raw.githubusercontent.com/wolffcatskyy/crowdsec-unifi-bouncer/main/bootstrap.sh | bash
 
 # 3. Configure — set your LAPI address and API key
-$EDITOR /data/crowdsec-bouncer/crowdsec-firewall-bouncer.yaml
+nano /data/crowdsec-bouncer/crowdsec-firewall-bouncer.yaml
 
 # 4. Start
 systemctl start crowdsec-firewall-bouncer
@@ -84,157 +84,6 @@ ipset list crowdsec-blacklists -t | grep "Number of entries"
 ```
 
 That's it. The bouncer auto-detects your device, sets safe ipset limits, and persists across firmware updates.
-
-## Architecture
-
-```
-┌─────────────────────────────────────────────────────────────┐
-│                     CrowdSec LAPI                           │
-│              (local detections + CAPI feed)                  │
-└──────────────┬──────────────────────┬───────────────────────┘
-               │                      │
-       Direct connection        With sidecar proxy
-               │                      │
-               ▼                      ▼
-                               ┌──────────────────┐
-                               │  Sidecar Proxy    │
-                               │  Score & rank     │
-                               │  120K → top 18K   │
-                               │  Port 8084        │
-                               └────────┬─────────┘
-               │                        │
-               ▼                        ▼
-┌─────────────────────────────────────────────────────────────┐
-│                   UniFi Device                              │
-│  ┌─────────────────────┐  ┌──────────────────────────────┐  │
-│  │  Firewall Bouncer   │  │  Persistence Layer           │  │
-│  │  (official Go bin)  │  │  setup.sh     → ExecStartPre │  │
-│  │  15 MB RAM          │  │  ensure-rules → cron (5 min) │  │
-│  │  ipset + iptables   │  │  /data/       → survives FW  │  │
-│  └─────────────────────┘  └──────────────────────────────┘  │
-└─────────────────────────────────────────────────────────────┘
-```
-
-Three persistence mechanisms keep the bouncer running through anything UniFi OS throws at it:
-
-1. **`setup.sh` (ExecStartPre)** — runs before every bouncer start; loads ipset modules, creates ipset, adds iptables rules, re-links systemd service
-2. **`ensure-rules.sh` (cron, every 5 min)** — catches controller reprovisioning that silently removes iptables rules while the bouncer is running
-3. **Everything in `/data/crowdsec-bouncer/`** — the one persistent directory that survives firmware updates
-
-## Device Compatibility & Defaults
-
-The bouncer auto-detects your UniFi device model on startup and applies safe default ipset limits based on [Ubiquiti's CyberSecure IPS signature capacity specifications](https://help.ui.com/hc/en-us/articles/25930305913751).
-
-Detection methods (tried in order):
-1. `ubnt-device-info model` — most reliable on UniFi OS 3+
-2. `/proc/ubnthal/system.info` shortname field
-3. `/etc/unifi-os/unifi_version` model field
-4. `/sys/firmware/devicetree/base/model` device tree
-5. `dmesg` pattern matching (last resort)
-
-### Device Capacity Matrix
-
-| Model | Tier | Default ipset | Memory Optimized | Sidecar Cap |
-|-------|------|---------------|------------------|-------------|
-| EFG | Enterprise | 80,000 | -- | 78,000 |
-| UXG-Enterprise | Enterprise | 80,000 | -- | 78,000 |
-| UDM-Pro-Max | Pro | 50,000 | 30,000 | 48,000 |
-| UDM-SE | Pro | 50,000 | 30,000 | 48,000 |
-| UDM-Pro | Pro | 50,000 | 30,000 | 48,000 |
-| UDW | Pro | 50,000 | 30,000 | 48,000 |
-| UCG-Max | Pro | 50,000 | 30,000 | 48,000 |
-| UCG-Ultra | Pro | 50,000 | 30,000 | 48,000 |
-| UCG-Fiber | Pro | 50,000 | 30,000 | 48,000 |
-| UXG-Max | Pro | 50,000 | 30,000 | 48,000 |
-| UXG-Pro | Pro | 50,000 | 30,000 | 48,000 |
-| UXG-Fiber | Pro | 50,000 | 30,000 | 48,000 |
-| UDM | Consumer | 15,000 | -- | 13,000 |
-| UDR | Consumer | 15,000 | -- | 13,000 |
-| UDR7 | Consumer | 15,000 | -- | 13,000 |
-| UX7 | Consumer | 15,000 | -- | 13,000 |
-| UX | **Unsupported** | -- | -- | -- |
-| UXG-Lite | **Unsupported** | -- | -- | -- |
-| Unknown device | -- | 10,000 | -- | 8,000 |
-
-"Sidecar Cap" = recommended `max_decisions` for the sidecar proxy, leaving 2,000 entries of headroom for manual bans.
-
-### Environment Variables
-
-| Variable | Description | Default |
-|----------|-------------|---------|
-| `MAXELEM_OVERRIDE` | Manual override for ipset maxelem. Bypasses auto-detection. Logs a warning if it exceeds the recommended limit for your device. | Auto-detected |
-| `MEMORY_OPTIMIZED` | Set to `true` to use reduced limits for devices running BGP, ad-blocking, content filtering, or multiple UniFi applications. | `false` |
-
-<details>
-<summary><strong>Usage Scenarios</strong></summary>
-
-**Scenario 1: Default (auto-detect, safe limits)**
-```bash
-# No configuration needed — bouncer auto-detects and uses safe defaults
-systemctl start crowdsec-firewall-bouncer
-```
-
-**Scenario 2: Power user (higher limits)**
-
-For users NOT running Protect, Talk, Access, BGP, ad-blocking, or content filtering:
-```bash
-MAXELEM_OVERRIDE=70000 /data/crowdsec-bouncer/setup.sh
-```
-
-**Scenario 3: Memory constrained**
-
-For devices running BGP, ad-blocking, content filtering, or multiple UniFi applications:
-```bash
-MEMORY_OPTIMIZED=true /data/crowdsec-bouncer/setup.sh
-```
-
-**Scenario 4: Unknown device**
-```
-[WARNING] Could not detect device model, using conservative limit of 10000
-[INFO] Set MAXELEM_OVERRIDE to specify a higher limit if needed
-[INFO] Using ipset maxelem: 10000
-```
-
-**Scenario 5: Unsupported device**
-```
-[ERROR] Detected device model: UXG-Lite
-[ERROR] This device does not support firewall groups/ipsets
-[ERROR] crowdsec-unifi-bouncer cannot run on this device
-```
-
-</details>
-
-### Custom Limits
-
-To use a different limit, set `MAXELEM_OVERRIDE` as an environment variable before starting the bouncer. If using the sidecar, also set `max_decisions` in the sidecar config to match (`MAXELEM_OVERRIDE - 2000`).
-
-## What's Included
-
-| File | Purpose |
-|------|---------|
-| `bootstrap.sh` | One-line installer -- downloads everything and runs setup |
-| `install.sh` | Downloads the official bouncer binary, installs to `/data/crowdsec-bouncer/` |
-| `setup.sh` | ExecStartPre script -- loads ipset modules, creates ipset, adds iptables rules, re-links systemd service |
-| `detect-device.sh` | Auto-detects UniFi model and sets safe maxelem defaults |
-| `detect-sidecar.sh` | Detects whether bouncer uses sidecar proxy or direct LAPI |
-| `ensure-rules.sh` | Cron job (every 5 min) -- re-adds iptables rules if controller reprovisioning removed them |
-| `ipset-capacity-monitor.sh` | Monitors for "set is full" errors, logs dropped decisions, updates metrics |
-| `metrics.sh` | Prometheus metrics endpoint for monitoring |
-| `sidecar/` | Intelligent decision-filtering proxy (Go) -- see [Sidecar Proxy](#sidecar-proxy-optional-but-recommended) |
-
-## Tested On
-
-- UniFi Dream Machine SE (UDM SE) -- UniFi OS 4.x
-- UniFi Dream Router (UDR) -- UniFi OS 4.x
-
-Should work on any UniFi OS device with SSH access and iptables/ipset support.
-
-## Resource Usage
-
-| Component | RAM | CPU | Disk |
-|-----------|-----|-----|------|
-| Firewall bouncer | 15-22 MB | <1% avg | ~15 MB |
-| Sidecar proxy | ~8 MB | <1% avg | ~10 MB (Docker image) |
 
 ## Installation
 
@@ -269,359 +118,45 @@ cd /tmp && bash install.sh
 
 ## Configuration
 
-```bash
-$EDITOR /data/crowdsec-bouncer/crowdsec-firewall-bouncer.yaml
-```
+Edit `/data/crowdsec-bouncer/crowdsec-firewall-bouncer.yaml` and set your `api_url` and `api_key`. If using the sidecar proxy, point `api_url` at port 8084 instead of the LAPI port 8080.
 
-**Critical settings:**
+See the [full configuration reference](docs/configuration.md) for all settings, startup commands, and verification steps.
 
-```yaml
-# Direct LAPI connection (default):
-api_url: http://192.168.1.100:8080/
-api_key: YOUR_BOUNCER_API_KEY
+## Architecture
 
-# Or, if using the sidecar proxy:
-# api_url: http://192.168.1.100:8084/
-# api_key: YOUR_BOUNCER_API_KEY
-```
+Three persistence mechanisms keep the bouncer running through firmware updates and controller reprovisioning. An optional sidecar proxy scores 120K+ decisions across 7 factors so your device's limited ipset always holds the highest-priority threats.
 
-### Config Reference
+See [docs/architecture.md](docs/architecture.md) for the full diagram and persistence mechanism details.
 
-| Setting | Default | Description |
-|---------|---------|-------------|
-| `mode` | `ipset` | Use ipset for efficient IP matching |
-| `update_frequency` | `10s` | How often to poll for new decisions |
-| `api_url` | -- | LAPI address (port 8080) or sidecar address (port 8084) |
-| `api_key` | -- | Bouncer API key from `cscli bouncers add` |
-| `disable_ipv6` | `true` | UniFi has issues with IPv6 firewall rules |
-| `deny_action` | `DROP` | `DROP` (silent) or `REJECT` (sends reset) |
+## Device Compatibility
 
-### Start the Bouncer
+The bouncer auto-detects your UniFi device model and applies safe ipset limits. Supported tiers: Enterprise (80K), Pro (50K), Consumer (15K). UX and UXG-Lite are not supported.
 
-```bash
-# Link and start systemd service
-ln -sf /data/crowdsec-bouncer/crowdsec-firewall-bouncer.service /etc/systemd/system/
-systemctl daemon-reload
-systemctl enable crowdsec-firewall-bouncer
-systemctl start crowdsec-firewall-bouncer
-
-# Install cron for rule persistence
-(crontab -l 2>/dev/null; echo "*/5 * * * * /data/crowdsec-bouncer/ensure-rules.sh") | crontab -
-```
-
-### Verify
-
-```bash
-# Service running?
-systemctl status crowdsec-firewall-bouncer
-
-# IPs being blocked?
-ipset list crowdsec-blacklists | head -20
-
-# How many IPs loaded?
-ipset list crowdsec-blacklists -t | grep "Number of entries"
-
-# iptables rules in place?
-iptables -L INPUT -n | grep crowdsec
-iptables -L FORWARD -n | grep crowdsec
-
-# Logs
-tail -f /data/crowdsec-bouncer/log/crowdsec-firewall-bouncer.log
-
-# Check from CrowdSec LAPI host
-cscli bouncers list
-```
+See [docs/device-compatibility.md](docs/device-compatibility.md) for the full device matrix, environment variables, and usage scenarios.
 
 ## Sidecar Proxy (Optional but Recommended)
 
-### The Problem Without a Sidecar
+The sidecar scores all LAPI decisions across 7 factors (scenario severity, origin, freshness, recidivism, and more) and returns only the top N that fit your device. Your local detections and manual bans always survive — only low-signal bulk imports are dropped.
 
-When CrowdSec's LAPI has more decisions than your device can hold, the bouncer fills the ipset and silently drops everything else. There's no prioritization -- a stale probing ban from three weeks ago takes a slot that could go to an active SSH brute-force attack detected today.
-
-```
-CrowdSec LAPI: 120,000 decisions
-        |
-        v
-Firewall Bouncer: loads first 20,000
-        |
-        v
-ipset: FULL (remaining 100,000 silently dropped)
-        |
-        +-- No scoring, no prioritization
-            New SSH attack? Too bad, set is full.
-```
-
-### How the Sidecar Fixes This
-
-The sidecar proxy sits between the bouncer and LAPI. It fetches all decisions, scores each one across 7 factors, sorts by score, and returns only the top N that fit your device.
-
-```
-CrowdSec LAPI (120,000 decisions)
-        |
-        v
-+---------------------------+
-|   Sidecar Proxy           |
-|                           |
-|   Score all 120,000       |
-|   Sort by priority        |
-|   Return top 18,000       |
-|                           |
-|   Port 8084               |
-+---------------------------+
-        |
-        v
-Firewall Bouncer -> ipset (18,000 highest-priority threats)
-```
-
-### Scoring Factors
-
-Every decision is scored across 7 factors. Higher score = higher priority = kept when truncating.
-
-| Factor | Points | How It Works |
-|--------|--------|-------------|
-| Scenario | 0-120 | Base score from scenario pattern match, multiplied by 2x. SSH brute force (50 base = 100 pts) beats HTTP probing (30 base = 60 pts). |
-| Origin | 10-25 | Local detections (`crowdsec`: 25) beat community data (`CAPI`: 10). Your network saw it vs. someone else's. |
-| TTL | 0-10 | Longer bans score higher. Linear scaling over 7 days. |
-| Decision Type | 0-5 | Bans (+5) over captchas (+0). |
-| Freshness | 0-15 | Created <1h ago: +15. <24h: +10. <7d: +5. Active threats beat stale entries. |
-| CIDR | 0-20 | Broader ranges block more. /16: +20. /24: +10. /32: +0. |
-| Recidivism | 0-N | +15 per additional decision for the same IP. 3 bans for one IP = +30 each. Repeat offenders rise to the top. |
-
-### What Survives Truncation
-
-The scoring system ensures your highest-value detections are never dropped. In production with 125K LAPI decisions filtered to 38K:
-
-| Source | Kept | Why |
-|--------|------|-----|
-| Your local CrowdSec detections | **100%** | Origin score 25 + freshness bonus = always survives |
-| Manual bans (`cscli`) | **100%** | Origin score 20 = always survives |
-| Community curated lists | **100%** | Higher signal than bulk imports |
-| Community blocklist (CAPI) | **100%** | Scored above bulk feeds |
-| Bulk blocklist-import feeds | **13%** | Absorbs all drops -- stale single-source IPs shed first |
-
-Only low-signal bulk imports are dropped -- and even within those, IPs that appear in multiple sources get a recidivism bonus and survive.
-
-### Sidecar Quick Setup
-
-The sidecar image is published to **GHCR** (`ghcr.io/wolffcatskyy/crowdsec-sidecar`). Multi-arch (amd64/arm64).
-
-1. Deploy the sidecar on your CrowdSec host (or any machine that can reach LAPI):
-
-```bash
-# Download example config
-mkdir -p crowdsec-sidecar && cd crowdsec-sidecar
-curl -sSLO https://raw.githubusercontent.com/wolffcatskyy/crowdsec-unifi-bouncer/main/sidecar/config.yaml.example
-cp config.yaml.example config.yaml
-# Edit config.yaml: set upstream_lapi_url, upstream_lapi_key, max_decisions
-
-# Run with Docker
-docker run -d --name crowdsec-sidecar \
-  -p 8084:8084 \
-  -v $(pwd)/config.yaml:/etc/crowdsec-sidecar/config.yaml:ro \
-  --restart unless-stopped \
-  ghcr.io/wolffcatskyy/crowdsec-sidecar:latest
-```
-
-Or use docker compose -- see [sidecar/README.md](sidecar/README.md#docker-deployment-recommended) for the full compose file.
-
-2. Update your bouncer config on the UniFi device:
-
-```yaml
-# Change api_url from LAPI to sidecar
-api_url: http://YOUR_SIDECAR_HOST:8084/
-```
-
-3. Restart the bouncer:
-
-```bash
-systemctl restart crowdsec-firewall-bouncer
-```
-
-4. Verify the sidecar is working:
-
-```bash
-curl http://YOUR_SIDECAR_HOST:8084/health
-curl http://YOUR_SIDECAR_HOST:8084/metrics
-```
-
-### Do I Need the Sidecar?
-
-| Situation | Sidecar? | Why |
-|-----------|----------|-----|
-| LAPI has <15K decisions | No | Everything fits in ipset |
-| LAPI has 15K-30K decisions | Maybe | Depends on your device's maxelem |
-| LAPI has >30K decisions | **Yes** | Overflow is guaranteed on all devices |
-| You subscribe to community blocklists | **Yes** | Blocklists push decision counts way up |
-| Multiple bouncers on different devices | **Yes** | Each device gets decisions sized for its capacity |
-| You want to prioritize local detections | **Yes** | Scoring ensures your network's detections beat stale CAPI entries |
-
-For full sidecar documentation, see [sidecar/README.md](sidecar/README.md).
+Deploy it if your LAPI has more than ~15K-30K decisions, or if you subscribe to community blocklists. See [docs/sidecar.md](docs/sidecar.md) for setup and scoring details.
 
 ## AbuseIPDB Reporting (Optional)
 
-**New to AbuseIPDB?** [AbuseIPDB](https://www.abuseipdb.com) is a free, community-driven database of malicious IPs where users report attacks and check IP reputations. Get started at [abuseipdb.com](https://www.abuseipdb.com).
+Enable in the sidecar to automatically report locally-detected bans to AbuseIPDB. Reporting is fire-and-forget and never affects bouncer operation. Only local detections are reported — CAPI and blocklist-import decisions are skipped to avoid circular reporting.
 
-### How It Works
-
-When the sidecar processes new ban decisions from your local CrowdSec instance, it asynchronously reports each banned IP to AbuseIPDB with the appropriate abuse category and a comment describing the CrowdSec scenario that triggered the ban. Reporting is fire-and-forget -- it never blocks or affects decision processing.
-
-**Smart filtering prevents circular reporting:**
-- Only local CrowdSec detections and manual `cscli` bans are reported
-- CAPI (community blocklist) decisions are skipped -- they already exist in threat intel
-- Blocklist-import decisions are skipped -- avoids re-reporting IPs from other feeds
-- Only individual IP bans are reported (not CIDR ranges or captcha decisions)
-
-### Configuration
-
-Enable via environment variables in your sidecar deployment:
-
-```yaml
-# docker-compose.yaml
-environment:
-  - ABUSEIPDB_API_KEY=your_api_key_here
-  - ABUSEIPDB_REPORT_ENABLED=true
-```
-
-Or in the sidecar `config.yaml`:
-
-```yaml
-abuseipdb:
-  enabled: true
-  api_key: "your_api_key_here"
-  daily_limit: 100  # Free tier: 100/day, Premium: 3000/day
-```
-
-| Setting | Env Var | Default | Description |
-|---------|---------|---------|-------------|
-| `abuseipdb.enabled` | `ABUSEIPDB_REPORT_ENABLED` | `false` | Enable reporting |
-| `abuseipdb.api_key` | `ABUSEIPDB_API_KEY` | -- | API key from [abuseipdb.com/account/api](https://www.abuseipdb.com/account/api) |
-| `abuseipdb.daily_limit` | -- | `100` | Max reports per 24h window |
-
-### Scenario Category Mapping
-
-CrowdSec scenarios are automatically mapped to AbuseIPDB abuse categories:
-
-| CrowdSec Scenario | AbuseIPDB Categories |
-|--------------------|----------------------|
-| SSH attacks (`ssh-bf`, `ssh-slow-bf`, etc.) | 22 (SSH), 18 (Brute-Force) |
-| Telnet attacks | 23 (Telnet), 18 (Brute-Force) |
-| HTTP attacks (`http-*`) | 21 (Web App Attack) |
-| SMB/FTP brute force | 18 (Brute-Force) |
-| Other scenarios | 14 (Port Scan) |
-
-### Rate Limits
-
-The reporter enforces a daily limit (default: 100) that resets every 24 hours. When the limit is reached, additional reports are silently skipped until the window resets. AbuseIPDB API 429 responses are also handled gracefully.
-
-### Prometheus Metrics
-
-| Metric | Type | Description |
-|--------|------|-------------|
-| `abuseipdb_reports_total` | Counter | Total reports by status (`success`, `failed`, `skipped`) |
-| `abuseipdb_reports_queued` | Counter | Reports queued for async sending |
-
-## Capacity Monitoring
-
-When ipset reaches capacity, the bouncer logs errors and new IPs can't be added. The `ipset-capacity-monitor.sh` script detects this and exposes metrics:
-
-```bash
-# Check current status (includes sidecar detection)
-/data/crowdsec-bouncer/ipset-capacity-monitor.sh --status
-```
-
-The status output shows current ipset usage, dropped decision counts, whether you're using a sidecar, and device-specific tuning recommendations.
+See [docs/abuseipdb.md](docs/abuseipdb.md) for configuration and scenario-to-category mapping.
 
 ## Prometheus Metrics
 
-### Bouncer Metrics (port 9101)
+The bouncer exposes metrics on port 9101 (ipset fill ratio, blocked IPs, dropped decisions). The sidecar exposes effectiveness metrics on port 8084. A Grafana dashboard is included at `grafana/crowdsec-unifi-bouncer-dashboard.json`.
 
-```bash
-ln -sf /data/crowdsec-bouncer/crowdsec-unifi-metrics.service /etc/systemd/system/
-systemctl daemon-reload
-systemctl enable --now crowdsec-unifi-metrics
-
-curl http://localhost:9101/metrics
-```
-
-| Metric | Description |
-|--------|-------------|
-| `crowdsec_unifi_bouncer_blocked_ips_total` | Current IPs in ipset |
-| `crowdsec_unifi_bouncer_ipset_fill_ratio` | Capacity usage (0.0-1.0) |
-| `crowdsec_unifi_bouncer_decisions_dropped_total` | Decisions dropped due to capacity |
-| `crowdsec_unifi_bouncer_memory_available_kb` | Available system memory |
-
-### Sidecar Metrics (port 8084)
-
-If using the sidecar, it exposes its own metrics at `/metrics` including effectiveness metrics that show per-origin kept/dropped counts, score distribution, and false-negative detection. See [sidecar/README.md](sidecar/README.md#prometheus-metrics-reference) for the full list.
-
-### Grafana Dashboard
-
-A ready-to-import Grafana dashboard is included at [`grafana/crowdsec-unifi-bouncer-dashboard.json`](grafana/crowdsec-unifi-bouncer-dashboard.json).
+See [docs/metrics.md](docs/metrics.md) for the full metrics reference.
 
 ## Troubleshooting
 
-<details>
-<summary><strong>Bouncer starts but no IPs blocked</strong></summary>
+Common issues: bouncer starts but no IPs blocked, iptables rules disappearing, service lost after firmware update, sidecar 502s, ipset full.
 
-```bash
-curl -s http://YOUR_LAPI:8080/v1/decisions -H "X-Api-Key: YOUR_KEY" | head
-tail -50 /data/crowdsec-bouncer/log/crowdsec-firewall-bouncer.log
-```
-</details>
-
-<details>
-<summary><strong>iptables rules keep disappearing</strong></summary>
-
-```bash
-crontab -l | grep ensure-rules
-/data/crowdsec-bouncer/ensure-rules.sh
-```
-</details>
-
-<details>
-<summary><strong>Service gone after firmware update</strong></summary>
-
-```bash
-ln -sf /data/crowdsec-bouncer/crowdsec-firewall-bouncer.service /etc/systemd/system/
-systemctl daemon-reload
-systemctl start crowdsec-firewall-bouncer
-```
-</details>
-
-<details>
-<summary><strong>Device becomes unresponsive</strong></summary>
-
-1. Reboot via UniFi app or power cycle
-2. Reduce `ipset_size` in config (or reduce sidecar `max_decisions`) before restarting bouncer
-</details>
-
-<details>
-<summary><strong>Sidecar not filtering decisions</strong></summary>
-
-```bash
-# Check sidecar health
-curl http://YOUR_SIDECAR_HOST:8084/health
-
-# Check sidecar metrics (look at decisions_total vs decisions_dropped)
-curl http://YOUR_SIDECAR_HOST:8084/metrics
-
-# Check sidecar logs
-docker logs crowdsec-sidecar --tail 50
-
-# Verify bouncer points to sidecar (should show port 8084)
-grep api_url /data/crowdsec-bouncer/crowdsec-firewall-bouncer.yaml
-```
-</details>
-
-<details>
-<summary><strong>Sidecar returns 502 Bad Gateway</strong></summary>
-
-```bash
-# LAPI is unreachable from sidecar — check upstream_lapi_url in sidecar config
-curl http://YOUR_LAPI:8080/health
-docker exec crowdsec-sidecar wget -q -O- http://YOUR_LAPI:8080/health
-```
-</details>
+See [docs/troubleshooting.md](docs/troubleshooting.md) for diagnostics and solutions.
 
 ## Migration from Python Bouncer
 
@@ -637,22 +172,6 @@ The native bouncer uses ipset/iptables directly:
 - **No UniFi credentials needed**
 - **No Docker overhead** -- single Go binary, 15 MB RAM
 - **Faster response** -- 10s polling vs 60s
-
-## Uninstall
-
-```bash
-systemctl stop crowdsec-firewall-bouncer
-systemctl disable crowdsec-firewall-bouncer
-rm /etc/systemd/system/crowdsec-firewall-bouncer.service
-systemctl daemon-reload
-
-iptables -D INPUT -m set --match-set crowdsec-blacklists src -j DROP 2>/dev/null
-iptables -D FORWARD -m set --match-set crowdsec-blacklists src -j DROP 2>/dev/null
-ipset destroy crowdsec-blacklists 2>/dev/null
-
-crontab -l | grep -v ensure-rules.sh | crontab -
-rm -rf /data/crowdsec-bouncer
-```
 
 ## Complete UniFi + CrowdSec Suite
 
