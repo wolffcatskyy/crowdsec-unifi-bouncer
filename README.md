@@ -173,14 +173,13 @@ The native bouncer uses ipset/iptables directly:
 - **No Docker overhead** -- single Go binary, 15 MB RAM
 - **Faster response** -- 10s polling vs 60s
 
-## Complete UniFi + CrowdSec Suite
+## Part of the CrowdSec UniFi Ecosystem
 
-| Project | Role | What it does |
-|---------|------|-------------|
-| **[crowdsec-unifi-parser](https://github.com/wolffcatskyy/crowdsec-unifi-parser)** | Visibility | Deploys iptables LOG rules so CrowdSec can detect threats from firewall logs |
-| **[crowdsec-blocklist-import](https://github.com/wolffcatskyy/crowdsec-blocklist-import)** | Intelligence | Imports IPs from public threat feeds into CrowdSec |
-| **This repo** | Enforcement | Pushes CrowdSec ban decisions to your UniFi firewall |
-| **This repo (`sidecar/`)** | Prioritization | Scores and filters decisions to fit device capacity |
+| Project | Description |
+|---------|-------------|
+| [crowdsec-unifi-suite](https://github.com/wolffcatskyy/crowdsec-unifi-suite) | One-command installer for the full stack |
+| [crowdsec-blocklist-import](https://github.com/wolffcatskyy/crowdsec-blocklist-import) | Import 28+ threat feeds into CrowdSec |
+| [crowdsec-unifi-parser](https://github.com/wolffcatskyy/crowdsec-unifi-parser) | Parse UniFi firewall logs for CrowdSec |
 
 ## Contributing
 
