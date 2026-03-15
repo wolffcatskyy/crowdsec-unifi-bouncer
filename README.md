@@ -32,6 +32,7 @@ Drop-in install of the official [CrowdSec firewall bouncer](https://github.com/c
 - **Prometheus metrics** — monitor ipset fill ratio, dropped decisions, and sidecar effectiveness
 - **Grafana dashboard** — included, ready to import
 - **AbuseIPDB reporting** (v2.4.0) — automatically reports locally-banned IPs to AbuseIPDB, contributing to community threat intelligence
+- **LOG rules for detection** (v2.5.0) — iptables LOG rules make dropped packets visible to CrowdSec, enabling port scan detection and AbuseIPDB reporting
 - **Lightweight** — 15 MB RAM for the bouncer, 8 MB for the sidecar
 
 ## Table of Contents
@@ -44,6 +45,7 @@ Drop-in install of the official [CrowdSec firewall bouncer](https://github.com/c
 - [Configuration](docs/configuration.md)
 - [Sidecar Proxy](docs/sidecar.md)
 - [AbuseIPDB Reporting](docs/abuseipdb.md)
+- [LOG Rules for Detection](#log-rules-for-detection)
 - [Prometheus Metrics](docs/metrics.md)
 - [Troubleshooting](docs/troubleshooting.md)
 - [Migration from v1.x](#migration-from-python-bouncer)
@@ -106,7 +108,7 @@ cd crowdsec-unifi-bouncer
 
 # Copy files to your UniFi device
 scp install.sh setup.sh detect-device.sh detect-sidecar.sh ensure-rules.sh \
-    ipset-capacity-monitor.sh metrics.sh \
+    log-rules.sh ipset-capacity-monitor.sh metrics.sh \
     crowdsec-firewall-bouncer.service crowdsec-unifi-metrics.service \
     crowdsec-firewall-bouncer.yaml.example \
     root@<UNIFI_IP>:/tmp/
@@ -145,6 +147,34 @@ Deploy it if your LAPI has more than ~15K-30K decisions, or if you subscribe to 
 Enable in the sidecar to automatically report locally-detected bans to AbuseIPDB. Reporting is fire-and-forget and never affects bouncer operation. Only local detections are reported — CAPI and blocklist-import decisions are skipped to avoid circular reporting.
 
 See [docs/abuseipdb.md](docs/abuseipdb.md) for configuration and scenario-to-category mapping.
+
+## LOG Rules for Detection
+
+The bouncer blocks malicious IPs, but by default UniFi routers silently drop packets with no log entry. Without visibility into dropped traffic, CrowdSec cannot detect patterns like port scans from already-blocked IPs, and has nothing to report to AbuseIPDB or CAPI.
+
+The `log-rules.sh` script solves this by inserting iptables LOG rules immediately before every DROP rule in UniFi's WAN firewall chains. Dropped packets are logged to syslog with structured prefixes like `[UNIFI-WAN_LOCAL-D-ALL]`, making them parseable by [crowdsec-unifi-parser](https://github.com/wolffcatskyy/crowdsec-unifi-parser).
+
+**What this enables:**
+- CrowdSec detection of port scans and brute force from blocked IPs
+- AbuseIPDB reporting of detected attacks (via the sidecar)
+- CAPI contribution (sharing your detections with the CrowdSec community)
+
+LOG rules are automatically maintained by `ensure-rules.sh` (runs every 5 minutes via cron), so they survive reboots and firmware updates. They are rate-limited (10/min burst 20) to avoid log flooding.
+
+**Setup:** LOG rules are deployed automatically during installation. To check status or manage manually:
+
+```bash
+# Check current LOG rule status
+/data/crowdsec-bouncer/log-rules.sh --status
+
+# Manually redeploy
+/data/crowdsec-bouncer/log-rules.sh
+
+# Remove all LOG rules
+/data/crowdsec-bouncer/log-rules.sh --remove
+```
+
+**Syslog forwarding:** To complete the detection loop, configure your UniFi device to forward syslog to your CrowdSec instance. See the [crowdsec-unifi-parser](https://github.com/wolffcatskyy/crowdsec-unifi-parser) for parser configuration.
 
 ## Prometheus Metrics
 

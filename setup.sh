@@ -89,4 +89,10 @@ if [ ! -L /etc/systemd/system/crowdsec-firewall-bouncer.service ]; then
     systemctl daemon-reload
 fi
 
+# Deploy iptables LOG rules for CrowdSec detection visibility
+if [ -x "$BOUNCER_DIR/log-rules.sh" ]; then
+    echo "Deploying iptables LOG rules..."
+    "$BOUNCER_DIR/log-rules.sh" || echo "[WARN] LOG rule deployment failed (non-fatal)"
+fi
+
 echo "CrowdSec bouncer ready"

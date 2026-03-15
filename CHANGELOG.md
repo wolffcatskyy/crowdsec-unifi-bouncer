@@ -5,6 +5,18 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [Unreleased]
+
+### Added
+- **iptables LOG rules** — `log-rules.sh` inserts LOG rules before every DROP rule in UniFi WAN firewall chains, giving CrowdSec visibility into blocked traffic
+  - Enables detection of port scans and brute force from already-blocked IPs
+  - Structured log prefixes (`[UNIFI-WAN_LOCAL-D-ALL]`, `[UNIFI-WAN_LAN-D-INVALID]`) parseable by crowdsec-unifi-parser
+  - Rate-limited (10/min burst 20) to prevent log flooding
+  - Idempotent — safe to run repeatedly; cleans up old rules before re-inserting
+  - Automatically maintained by `ensure-rules.sh` (survives reboots and firmware updates)
+  - Supports all WAN chains: LOCAL, LAN, IN, DMZ, GUEST, VPN, WAN
+  - Standalone usage: `--status`, `--remove`, `--quiet` flags
+
 ## [2.4.0] - 2026-03-13
 
 ### Added
