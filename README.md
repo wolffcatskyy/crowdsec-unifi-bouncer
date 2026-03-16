@@ -1,5 +1,7 @@
 # CrowdSec Firewall Bouncer for UniFi OS
 
+[![GitHub Sponsors](https://img.shields.io/github/sponsors/wolffcatskyy?label=Sponsor&logo=github&color=ea4aaa)](https://github.com/sponsors/wolffcatskyy)
+[![Ko-fi](https://img.shields.io/badge/Ko--fi-Support-FF5E5B?logo=ko-fi&logoColor=white)](https://ko-fi.com/wolffcatskyy)
 [![GitHub Release](https://img.shields.io/github/v/release/wolffcatskyy/crowdsec-unifi-bouncer?style=flat-square&color=blue)](https://github.com/wolffcatskyy/crowdsec-unifi-bouncer/releases)
 [![GitHub Stars](https://img.shields.io/github/stars/wolffcatskyy/crowdsec-unifi-bouncer?style=flat-square)](https://github.com/wolffcatskyy/crowdsec-unifi-bouncer/stargazers)
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg?style=flat-square)](LICENSE)
