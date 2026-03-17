@@ -96,3 +96,11 @@ if ! iptables -C FORWARD -m set --match-set "$IPSET_NAME" src -j DROP 2>/dev/nul
     # Record rule restoration for Prometheus metrics
     [ -x "$METRICS_SCRIPT" ] && "$METRICS_SCRIPT" --record-rule-restored 2>/dev/null || true
 fi
+
+# --- LOG rule persistence ---
+# Deploy iptables LOG rules before DROP rules in WAN chains
+# This gives CrowdSec visibility into blocked traffic for detection and reporting
+LOG_RULES_SCRIPT="$BOUNCER_DIR/log-rules.sh"
+if [ -x "$LOG_RULES_SCRIPT" ]; then
+    "$LOG_RULES_SCRIPT" --quiet 2>/dev/null || true
+fi

@@ -68,6 +68,7 @@ FILES=(
     "detect-device.sh"
     "detect-sidecar.sh"
     "ensure-rules.sh"
+    "log-rules.sh"
     "ipset-capacity-monitor.sh"
     "metrics.sh"
     "crowdsec-firewall-bouncer.service"
@@ -92,6 +93,7 @@ chmod +x "$BOUNCER_DIR/install.sh" \
          "$BOUNCER_DIR/detect-device.sh" \
          "$BOUNCER_DIR/detect-sidecar.sh" \
          "$BOUNCER_DIR/ensure-rules.sh" \
+         "$BOUNCER_DIR/log-rules.sh" \
          "$BOUNCER_DIR/ipset-capacity-monitor.sh" \
          "$BOUNCER_DIR/metrics.sh"
 
