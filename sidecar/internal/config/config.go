@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"os"
 	"regexp"
+	"strconv"
 	"time"
 
 	"github.com/wolffcatskyy/crowdsec-unifi-bouncer/sidecar/internal/abuseipdb"
@@ -159,6 +160,17 @@ func Load(path string) (*Config, error) {
 	}
 	if cfg.EvictionMode == "" {
 		cfg.EvictionMode = "cap"
+	}
+
+	// MAX_DECISIONS overrides the configured (or default) decision cap. An invalid
+	// value is rejected at startup rather than silently ignored — a silent fallback
+	// would let the bouncer overflow its ipset, the exact failure this proxy prevents.
+	if envMax := os.Getenv("MAX_DECISIONS"); envMax != "" {
+		n, err := strconv.Atoi(envMax)
+		if err != nil {
+			return nil, fmt.Errorf("invalid MAX_DECISIONS %q: %w", envMax, err)
+		}
+		cfg.MaxDecisions = n
 	}
 
 	// AbuseIPDB environment variable overrides
