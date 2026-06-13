@@ -12,7 +12,7 @@ upstream_lapi_url: "http://127.0.0.1:8080"
 # Bouncer API key (same key you'd use with the bouncer)
 upstream_lapi_key: "YOUR_BOUNCER_KEY"
 
-# Maximum number of decisions to return to bouncer
+# Maximum number of decisions to return to bouncer (env: MAX_DECISIONS)
 # Set below your ipset maxelem to leave headroom for manual entries
 # Example: device maxelem=20000, set max_decisions=18000
 max_decisions: 18000

@@ -481,6 +481,47 @@ upstream_lapi_key: "test-api-key"
 	}
 }
 
+func TestLoad_MaxDecisionsEnvOverride(t *testing.T) {
+	tmpDir := t.TempDir()
+	configPath := filepath.Join(tmpDir, "config.yaml")
+
+	configContent := `
+upstream_lapi_url: "http://localhost:8080"
+upstream_lapi_key: "test-api-key"
+max_decisions: 10000
+`
+	if err := os.WriteFile(configPath, []byte(configContent), 0644); err != nil {
+		t.Fatalf("Failed to write test config: %v", err)
+	}
+
+	// MAX_DECISIONS overrides the YAML value.
+	os.Setenv("MAX_DECISIONS", "18000")
+	cfg, err := Load(configPath)
+	os.Unsetenv("MAX_DECISIONS")
+	if err != nil {
+		t.Fatalf("Load() error = %v", err)
+	}
+	if cfg.MaxDecisions != 18000 {
+		t.Errorf("MaxDecisions = %d, want 18000 (env override)", cfg.MaxDecisions)
+	}
+
+	// A non-numeric value is rejected, not silently ignored.
+	os.Setenv("MAX_DECISIONS", "not-a-number")
+	_, err = Load(configPath)
+	os.Unsetenv("MAX_DECISIONS")
+	if err == nil {
+		t.Error("Load() expected error for non-numeric MAX_DECISIONS, got nil")
+	}
+
+	// A non-positive value is rejected by validation.
+	os.Setenv("MAX_DECISIONS", "0")
+	_, err = Load(configPath)
+	os.Unsetenv("MAX_DECISIONS")
+	if err == nil {
+		t.Error("Load() expected error for zero MAX_DECISIONS, got nil")
+	}
+}
+
 func TestScoringConfig_GetScenarioMultiplier(t *testing.T) {
 	cfg1 := &ScoringConfig{ScenarioMultiplier: 3.0}
 	if got := cfg1.GetScenarioMultiplier(); got != 3.0 {

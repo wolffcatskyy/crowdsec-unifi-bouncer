@@ -7,6 +7,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Fixed
+- **`MAX_DECISIONS` environment variable now works** — it was documented in v2.3.0 but never read by the sidecar, so env-based overrides were silently ignored and the cap fell back to the YAML `max_decisions` value or the 15000 default (risking ipset overflow, the exact failure this proxy prevents). The sidecar now honors `MAX_DECISIONS`, rejecting non-numeric or non-positive values at startup, matching how `EVICTION_MODE` is handled.
+
 ### Added
 - **iptables LOG rules** — `log-rules.sh` inserts LOG rules before every DROP rule in UniFi WAN firewall chains, giving CrowdSec visibility into blocked traffic
   - Enables detection of port scans and brute force from already-blocked IPs
