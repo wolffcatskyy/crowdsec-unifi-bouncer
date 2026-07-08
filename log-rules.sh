@@ -60,7 +60,7 @@ done
 # Logging helpers
 log_info() {
     if [ "$QUIET" = false ]; then
-        echo "[INFO] $1"
+        echo "[INFO] $1" >&2
     fi
 }
 
