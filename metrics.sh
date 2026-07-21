@@ -14,6 +14,12 @@
 
 set -euo pipefail
 
+# --- PATH hardening -----------------------------------------------------------
+# cron/systemd provide a minimal PATH without /usr/sbin, where ipset/iptables
+# live on UniFi OS. Without this, those calls silently fail under unattended
+# execution while working fine in an interactive shell. See issue #53.
+export PATH="/usr/sbin:/usr/bin:/sbin:/bin:$PATH"
+
 # Configuration
 METRICS_PORT="${METRICS_PORT:-9101}"
 BOUNCER_DIR="${BOUNCER_DIR:-/data/crowdsec-bouncer}"
@@ -27,6 +33,7 @@ init_state() {
         cat > "$STATE_FILE" << 'STATEOF'
 errors_total=0
 guardrail_triggered_total=0
+guardrail_recovered_total=0
 rules_restored_total=0
 decisions_dropped_total=0
 capacity_events_total=0
@@ -37,6 +44,9 @@ STATEOF
     # Ensure new fields exist in old state files (upgrade path)
     if ! grep -q "^decisions_dropped_total=" "$STATE_FILE" 2>/dev/null; then
         echo "decisions_dropped_total=0" >> "$STATE_FILE"
+    fi
+    if ! grep -q "^guardrail_recovered_total=" "$STATE_FILE" 2>/dev/null; then
+        echo "guardrail_recovered_total=0" >> "$STATE_FILE"
     fi
     if ! grep -q "^capacity_events_total=" "$STATE_FILE" 2>/dev/null; then
         echo "capacity_events_total=0" >> "$STATE_FILE"
@@ -155,6 +165,7 @@ collect_metrics() {
     init_state
     local errors_total
     local guardrail_triggered_total
+    local guardrail_recovered_total
     local rules_restored_total
     local decisions_dropped_total
     local capacity_events_total
@@ -162,6 +173,7 @@ collect_metrics() {
     local degraded
     errors_total=$(read_counter "errors_total")
     guardrail_triggered_total=$(read_counter "guardrail_triggered_total")
+    guardrail_recovered_total=$(read_counter "guardrail_recovered_total")
     rules_restored_total=$(read_counter "rules_restored_total")
     decisions_dropped_total=$(read_counter "decisions_dropped_total")
     capacity_events_total=$(read_counter "capacity_events_total")
@@ -227,6 +239,9 @@ crowdsec_unifi_bouncer_errors_total $errors_total
 # HELP crowdsec_unifi_bouncer_guardrail_triggered_total Number of times memory guardrail stopped the bouncer
 # TYPE crowdsec_unifi_bouncer_guardrail_triggered_total counter
 crowdsec_unifi_bouncer_guardrail_triggered_total $guardrail_triggered_total
+# HELP crowdsec_unifi_bouncer_guardrail_recovered_total Number of times the bouncer was auto-restarted after memory recovered
+# TYPE crowdsec_unifi_bouncer_guardrail_recovered_total counter
+crowdsec_unifi_bouncer_guardrail_recovered_total $guardrail_recovered_total
 
 # HELP crowdsec_unifi_bouncer_rules_restored_total Number of times iptables rules were re-added after removal
 # TYPE crowdsec_unifi_bouncer_rules_restored_total counter
@@ -308,6 +323,11 @@ record_guardrail() {
     increment_counter "guardrail_triggered_total" >/dev/null
 }
 
+record_guardrail_recovery() {
+    init_state
+    increment_counter "guardrail_recovered_total" >/dev/null
+}
+
 record_rule_restored() {
     init_state
     increment_counter "rules_restored_total" >/dev/null
@@ -342,6 +362,9 @@ case "${1:-}" in
     --record-guardrail)
         record_guardrail
         ;;
+    --record-guardrail-recovery)
+        record_guardrail_recovery
+        ;;
     --record-rule-restored)
         record_rule_restored
         ;;
@@ -363,6 +386,7 @@ Usage:
 Recording helpers (for use by ensure-rules.sh and ipset-capacity-monitor.sh):
   $0 --record-error              Increment errors_total counter
   $0 --record-guardrail          Increment guardrail_triggered_total counter
+  $0 --record-guardrail-recovery Increment guardrail_recovered_total counter
   $0 --record-rule-restored      Increment rules_restored_total counter
   $0 --record-dropped [N]        Record N decisions dropped due to capacity (default: 1)
   $0 --record-decisions-dropped [N]  Alias for --record-dropped
