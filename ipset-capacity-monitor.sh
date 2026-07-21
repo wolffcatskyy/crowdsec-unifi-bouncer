@@ -19,6 +19,12 @@
 
 set -euo pipefail
 
+# --- PATH hardening -----------------------------------------------------------
+# cron/systemd provide a minimal PATH without /usr/sbin, where ipset/iptables
+# live on UniFi OS. Without this, those calls silently fail under unattended
+# execution while working fine in an interactive shell. See issue #53.
+export PATH="/usr/sbin:/usr/bin:/sbin:/bin:$PATH"
+
 # Configuration
 BOUNCER_DIR="${BOUNCER_DIR:-/data/crowdsec-bouncer}"
 IPSET_NAME="${IPSET_NAME:-crowdsec-blacklists}"

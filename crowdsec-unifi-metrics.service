@@ -7,6 +7,10 @@ RequiresMountsFor=/data/crowdsec-bouncer
 
 [Service]
 Type=simple
+# systemd gives services a minimal PATH without /usr/sbin, where ipset/iptables
+# live on UniFi OS. Without this, metrics.sh reports zeroed/empty values for
+# ipset and rule state under systemd while working in an interactive shell. (#53)
+Environment=PATH=/usr/sbin:/usr/bin:/sbin:/bin
 Environment=METRICS_PORT=9101
 Environment=BOUNCER_DIR=/data/crowdsec-bouncer
 Environment=IPSET_NAME=crowdsec-blacklists
