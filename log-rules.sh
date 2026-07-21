@@ -1,5 +1,6 @@
 #!/bin/bash
 # CrowdSec Firewall Bouncer - iptables LOG Rule Deployment
+export PATH="/usr/sbin:/usr/bin:/sbin:/bin:$PATH"
 # Inserts LOG rules before DROP rules in UniFi WAN chains for CrowdSec visibility
 #
 # Without LOG rules, the bouncer blocks traffic but CrowdSec cannot detect

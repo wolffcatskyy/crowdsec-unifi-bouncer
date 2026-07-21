@@ -5,10 +5,13 @@
 # Add to crontab:
 #   */5 * * * * /data/crowdsec-bouncer/ensure-rules.sh
 
+export PATH="/usr/sbin:/usr/bin:/sbin:/bin:$PATH"
+
 IPSET_NAME="crowdsec-blacklists"
 BOUNCER_DIR="/data/crowdsec-bouncer"
 LOGFILE="$BOUNCER_DIR/log/memory.log"
 METRICS_SCRIPT="$BOUNCER_DIR/metrics.sh"
+GUARDRAIL_FLAG="$BOUNCER_DIR/.guardrail-triggered"
 
 # Detect sidecar mode for capacity recommendations
 SIDECAR_MODE=""
@@ -38,9 +41,34 @@ if [ -f "$LOGFILE" ] && [ "$(wc -l < "$LOGFILE")" -gt 1000 ]; then
 fi
 echo "$(date '+%F %T') entries=$IPSET_COUNT mem_avail=${MEM_AVAIL}kB bouncer=$BOUNCER_ACTIVE" >> "$LOGFILE"
 
+# --- Memory guardrail recovery ---
+# If the guardrail previously stopped the bouncer and memory has recovered
+# above threshold (with 20% hysteresis to prevent flapping), restart it.
+RECOVERY_HYSTERESIS_PCT=120  # require memory at 120% of threshold before restarting
+RECOVERY_THRESHOLD=$((MEM_THRESHOLD * RECOVERY_HYSTERESIS_PCT / 100))
+
+if [ -f "$GUARDRAIL_FLAG" ]; then
+    if [ "$BOUNCER_ACTIVE" = "active" ]; then
+        # Bouncer was restarted manually — clean up stale flag
+        rm -f "$GUARDRAIL_FLAG"
+        echo "$(date '+%F %T') GUARDRAIL: stale flag cleared — bouncer was restarted externally" >> "$LOGFILE"
+    elif [ "$MEM_AVAIL" -ge "$RECOVERY_THRESHOLD" ]; then
+        # Memory has recovered sufficiently — restart the bouncer
+        systemctl start crowdsec-firewall-bouncer
+        rm -f "$GUARDRAIL_FLAG"
+        echo "$(date '+%F %T') RECOVERY: restarted bouncer — mem_avail=${MEM_AVAIL}kB (threshold=${MEM_THRESHOLD}kB, recovery=${RECOVERY_THRESHOLD}kB)" >> "$LOGFILE"
+        logger -t crowdsec-bouncer "RECOVERY: restarted bouncer — mem_avail=${MEM_AVAIL}kB recovered above threshold"
+        # Re-read bouncer status for the rule-check section below
+        BOUNCER_ACTIVE="active"
+        # Record recovery event for Prometheus metrics
+        [ -x "$METRICS_SCRIPT" ] && "$METRICS_SCRIPT" --record-guardrail-recovery 2>/dev/null || true
+    fi
+fi
+
 # If memory is critical and bouncer is running, stop it (ipset entries stay — protection continues)
 if [ "$MEM_AVAIL" -lt "$MEM_THRESHOLD" ] && [ "$BOUNCER_ACTIVE" = "active" ] && [ "$IPSET_COUNT" -gt 0 ]; then
     systemctl stop crowdsec-firewall-bouncer
+    touch "$GUARDRAIL_FLAG"
     echo "$(date '+%F %T') GUARDRAIL: stopped bouncer at $IPSET_COUNT entries, mem_avail=${MEM_AVAIL}kB (threshold=${MEM_THRESHOLD}kB)" >> "$LOGFILE"
     logger -t crowdsec-bouncer "GUARDRAIL: stopped bouncer — mem_avail=${MEM_AVAIL}kB, entries=$IPSET_COUNT"
     # Record guardrail event for Prometheus metrics

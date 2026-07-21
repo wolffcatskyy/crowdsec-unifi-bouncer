@@ -3,6 +3,8 @@
 # Ensures ipset, iptables rules, and systemd service persist across firmware updates
 # Run as ExecStartPre in systemd service
 
+export PATH="/usr/sbin:/usr/bin:/sbin:/bin:$PATH"
+
 set -e
 
 BOUNCER_DIR="/data/crowdsec-bouncer"

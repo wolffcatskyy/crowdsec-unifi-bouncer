@@ -17,6 +17,8 @@
 #   CAPACITY_LOG      - Log file for capacity events (default: $BOUNCER_DIR/log/capacity.log)
 #   STATE_FILE        - Metrics state file (default: $BOUNCER_DIR/metrics-state)
 
+export PATH="/usr/sbin:/usr/bin:/sbin:/bin:$PATH"
+
 set -euo pipefail
 
 # Configuration
