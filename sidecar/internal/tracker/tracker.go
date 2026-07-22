@@ -56,21 +56,36 @@ type trackedDecision struct {
 
 // StreamTracker tracks cumulative CAPI decision counts between full syncs
 // and enforces the configured cap on incremental stream updates.
+// Two sets of decisions are tracked separately:
+//   - fullSyncSet: CAPI decisions from the authoritative full sync (always passed through)
+//   - trackedSet: INCREMENTAL CAPI decisions added since the last full sync
+//
+// The cap only applies to incremental additions. This fixes the bug where a full sync
+// returning more CAPI decisions than maxDecisions (e.g., UDM Pro with 20k active vs 15k max)
+// would make capiCount start over the cap, silently dropping all subsequent incrementals.
+// Evictions also only ever replace incremental decisions, never baseline ones.
 type StreamTracker struct {
 	mu           sync.Mutex
 	maxDecisions int
 	mode         EvictionMode
 	logger       *slog.Logger
 
-	// Cumulative count of CAPI decisions passed since last full sync.
+	// Cumulative count of INCREMENTAL CAPI decisions added since last full sync.
+	// Full sync baseline decisions are NOT counted here — the cap only applies to
+	// incremental additions (fixes #58).
 	capiCount int
 
-	// Ordered list of tracked CAPI decisions (oldest first) for eviction mode.
-	// Only populated when mode == ModeEvict.
+	// Ordered list of tracked INCREMENTAL CAPI decisions (oldest first) for eviction mode.
+	// Only populated when mode == ModeEvict. Never includes full-sync baseline decisions
+	// so eviction can never remove a baseline decision (fixes #57).
 	tracked []trackedDecision
 
-	// Set of currently tracked CAPI decision values for deduplication.
+	// Set of all currently tracked CAPI decision values for deduplication (baseline + incremental).
 	trackedSet map[string]struct{}
+
+	// Set of CAPI decision values from the authoritative full sync.
+	// These are not counted in capiCount and are never subject to eviction.
+	fullSyncSet map[string]struct{}
 
 	// Metrics (atomic for lock-free reads from metrics endpoint)
 	decisionsPassed atomic.Int64
@@ -87,7 +102,8 @@ type Metrics struct {
 	Evictions        int64
 	FullSyncs        int64
 	LastFullSync     int64
-	CAPICount        int
+	CAPICount        int // INCREMENTAL CAPI count (additions since last full sync)
+	BaseCount        int // Full-sync baseline CAPI decisions (authoritative set)
 	MaxDecisions     int
 	EvictionMode     string
 }
@@ -102,6 +118,7 @@ func New(maxDecisions int, mode EvictionMode, logger *slog.Logger) *StreamTracke
 		mode:         mode,
 		logger:       logger,
 		trackedSet:   make(map[string]struct{}),
+		fullSyncSet:  make(map[string]struct{}),
 	}
 }
 
@@ -113,6 +130,7 @@ func (t *StreamTracker) Reset() {
 	t.capiCount = 0
 	t.tracked = nil
 	t.trackedSet = make(map[string]struct{})
+	t.fullSyncSet = make(map[string]struct{})
 	t.fullSyncs.Add(1)
 	t.lastFullSync.Store(time.Now().Unix())
 
@@ -202,15 +220,24 @@ func (t *StreamTracker) addTracked(d lapi.Decision) {
 }
 
 // removeTracked removes a CAPI decision from tracking (called on deletion).
+// If the decision was part of the full-sync baseline, only the dedup set is updated
+// (capiCount is not decremented since baseline decisions are not counted).
+// If the decision was an incremental addition, capiCount is decremented.
 func (t *StreamTracker) removeTracked(value string) {
 	if _, exists := t.trackedSet[value]; !exists {
 		return
 	}
 
 	delete(t.trackedSet, value)
-	t.capiCount--
-	if t.capiCount < 0 {
-		t.capiCount = 0
+
+	// Only decrement capiCount if this was an incremental, not a baseline decision
+	if _, isBaseline := t.fullSyncSet[value]; isBaseline {
+		delete(t.fullSyncSet, value)
+	} else {
+		t.capiCount--
+		if t.capiCount < 0 {
+			t.capiCount = 0
+		}
 	}
 
 	if t.mode == ModeEvict {
@@ -243,27 +270,34 @@ func (t *StreamTracker) evictOldest() bool {
 	return true
 }
 
-// SetCapFromFullSync updates the CAPI count to reflect the number of CAPI decisions
-// that were included in a full sync response. This ensures the tracker knows how much
-// capacity remains for incremental decisions.
+// SetCapFromFullSync records the CAPI decisions from a full sync response as the
+// authoritative baseline. These baseline decisions are always passed through and are
+// NOT counted against the cap — the cap only applies to INCREMENTAL CAPI decisions
+// added after the full sync. This ensures that when a full sync returns more CAPI
+// decisions than maxDecisions (e.g., UDM Pro with 20k active vs 15k max), subsequent
+// incremental decisions are not silently dropped (fixes #58).
 func (t *StreamTracker) SetCapFromFullSync(capiDecisions []lapi.Decision) {
 	t.mu.Lock()
 	defer t.mu.Unlock()
 
+	// Reset incremental tracking state
 	t.capiCount = 0
 	t.tracked = nil
 	t.trackedSet = make(map[string]struct{})
+	t.fullSyncSet = make(map[string]struct{})
 
+	// Populate the baseline set from the full sync response
+	// These are NOT counted in capiCount — they're authoritative and always passed through
 	for _, d := range capiDecisions {
 		if !IsLocalOrigin(d.Origin) {
-			t.addTracked(d)
+			t.fullSyncSet[d.Value] = struct{}{}
+			t.trackedSet[d.Value] = struct{}{}
 		}
 	}
 
 	t.logger.Info("stream tracker initialized from full sync",
-		"capi_count", t.capiCount,
-		"max", t.maxDecisions,
-		"headroom", t.maxDecisions-t.capiCount,
+		"base_capi_count", len(t.fullSyncSet),
+		"max_incrementals", t.maxDecisions,
 	)
 }
 
@@ -271,6 +305,7 @@ func (t *StreamTracker) SetCapFromFullSync(capiDecisions []lapi.Decision) {
 func (t *StreamTracker) GetMetrics() Metrics {
 	t.mu.Lock()
 	capiCount := t.capiCount
+	baseCount := len(t.fullSyncSet)
 	t.mu.Unlock()
 
 	return Metrics{
@@ -280,6 +315,7 @@ func (t *StreamTracker) GetMetrics() Metrics {
 		FullSyncs:        t.fullSyncs.Load(),
 		LastFullSync:     t.lastFullSync.Load(),
 		CAPICount:        capiCount,
+		BaseCount:        baseCount,
 		MaxDecisions:     t.maxDecisions,
 		EvictionMode:     string(t.mode),
 	}
