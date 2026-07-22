@@ -7,6 +7,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Fixed
+- **LOG rule persistence on UCG Fiber / UniFi OS 4.x** — `log-rules.sh` now re-applied via 5-min cron (fixes parser issue #7). Previously, LOG rules were only deployed once at install/boot and vanished after a bouncer restart or iptables flush, while DROP rules already self-healed via `ensure-rules.sh`.
+
 ### Added
 - **iptables LOG rules** — `log-rules.sh` inserts LOG rules before every DROP rule in UniFi WAN firewall chains, giving CrowdSec visibility into blocked traffic
   - Enables detection of port scans and brute force from already-blocked IPs
