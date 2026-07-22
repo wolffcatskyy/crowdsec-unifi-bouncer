@@ -87,10 +87,15 @@ systemctl daemon-reload
 
 # Install cron jobs for rule persistence and capacity monitoring
 ENSURE_CRON="*/5 * * * * /data/crowdsec-bouncer/ensure-rules.sh"
+LOG_CRON="*/5 * * * * /data/crowdsec-bouncer/log-rules.sh --quiet"
 CAPACITY_CRON="*/5 * * * * /data/crowdsec-bouncer/ipset-capacity-monitor.sh --check >/dev/null 2>&1"
 if ! crontab -l 2>/dev/null | grep -q ensure-rules.sh; then
     (crontab -l 2>/dev/null; echo "$ENSURE_CRON") | crontab -
     echo "Rule persistence cron job installed."
+fi
+if ! crontab -l 2>/dev/null | grep -q log-rules.sh; then
+    (crontab -l 2>/dev/null; echo "$LOG_CRON") | crontab -
+    echo "LOG rule persistence cron job installed."
 fi
 if ! crontab -l 2>/dev/null | grep -q ipset-capacity-monitor; then
     (crontab -l 2>/dev/null; echo "$CAPACITY_CRON") | crontab -
