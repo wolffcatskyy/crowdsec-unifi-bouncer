@@ -17,6 +17,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   - Supports all WAN chains: LOCAL, LAN, IN, DMZ, GUEST, VPN, WAN
   - Standalone usage: `--status`, `--remove`, `--quiet` flags
 
+## [2.5.0] - 2026-07-21
+
+### Fixed
+- **Stream tracker cap mode silently drops incrementals after full sync** — when a full sync returned more CAPI decisions than `maxDecisions` (e.g., UDM Pro with 20k active vs 15k max), the incremental counter started already over the cap, silently dropping all subsequent incremental decisions. The cap now only applies to INCREMENTAL CAPI additions after the full sync baseline; baseline decisions are tracked separately in `fullSyncSet` and always passed through authoritatively. (Closes #58)
+- **Stream tracker evict mode causes mass eviction on restart** — after sidecar restart, `SetCapFromFullSync` repopulated the eviction-ordered `tracked` slice with all baseline CAPI decisions, making evictions potentially replace baseline (full-sync) decisions. The `tracked` slice now only holds incremental decisions; eviction can never touch the authoritative baseline. (Closes #57)
+
+### Added
+- `BaseCount` metric to expose the full-sync baseline CAPI decision count separately from incremental `CAPICount`
+- 4 new regression tests for #57 and #58 behaviors
+
 ## [2.4.0] - 2026-03-13
 
 ### Added
@@ -71,6 +81,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Cron-based iptables rule recovery
 - ipset capacity monitoring with Prometheus metrics
 
+[2.5.0]: https://github.com/wolffcatskyy/crowdsec-unifi-bouncer/compare/v2.4.0...v2.5.0
 [2.4.0]: https://github.com/wolffcatskyy/crowdsec-unifi-bouncer/compare/v2.3.0...v2.4.0
 [2.3.0]: https://github.com/wolffcatskyy/crowdsec-unifi-bouncer/compare/v2.2.0...v2.3.0
 [2.2.0]: https://github.com/wolffcatskyy/crowdsec-unifi-bouncer/compare/v2.1.0...v2.2.0
