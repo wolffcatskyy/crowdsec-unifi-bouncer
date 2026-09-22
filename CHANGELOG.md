@@ -5,6 +5,11 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [2.5.2] - 2026-09-22
+
+### Fixed
+- **Bootstrap version selection** — Stop forcing the obsolete upstream firewall-bouncer v0.0.34. The default one-line install now lets `install.sh` resolve the latest upstream release, while an explicit `BOUNCER_VERSION` still pins reproducibly.
+
 ## [2.5.1] - 2026-07-21
 
 ### Fixed

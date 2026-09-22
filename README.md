@@ -12,7 +12,7 @@
 Drop-in install of the official [CrowdSec firewall bouncer](https://github.com/crowdsecurity/cs-firewall-bouncer) on UniFi OS devices — with persistence that survives firmware updates, reboots, and controller reprovisioning. Includes an intelligent sidecar proxy that scores and prioritizes threats when you have more decisions than your device can hold.
 
 > [!TIP]
-> **v2.4.0 Released** — AbuseIPDB reporting is now built into the sidecar. Automatically report locally-banned IPs to AbuseIPDB, contributing your CrowdSec detections to community threat intelligence. See [AbuseIPDB Reporting](docs/abuseipdb.md) to enable it. [Release notes](https://github.com/wolffcatskyy/crowdsec-unifi-bouncer/releases/tag/v2.4.0)
+> **v2.5.2 Released** — the one-line bootstrap now installs the latest upstream firewall bouncer by default instead of pinning an obsolete release. Automatically report locally-banned IPs to AbuseIPDB, contributing your CrowdSec detections to community threat intelligence. See [AbuseIPDB Reporting](docs/abuseipdb.md) to enable it. [Release notes](https://github.com/wolffcatskyy/crowdsec-unifi-bouncer/releases/tag/v2.5.2)
 
 > [!CAUTION]
 > **Beware of impostor repositories.** The official CrowdSec UniFi Bouncer is hosted at [`wolffcatskyy/crowdsec-unifi-bouncer`](https://github.com/wolffcatskyy/crowdsec-unifi-bouncer). We do **not** distribute ZIP file downloads or executable installers. If you see a repo offering "one-click downloads" of this project, it may contain malware. Always install via the official instructions below.

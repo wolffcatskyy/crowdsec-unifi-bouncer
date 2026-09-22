@@ -6,13 +6,13 @@
 #   curl -sSL https://raw.githubusercontent.com/wolffcatskyy/crowdsec-unifi-bouncer/main/bootstrap.sh | bash
 #
 # Or with custom options:
-#   curl -sSL https://raw.githubusercontent.com/wolffcatskyy/crowdsec-unifi-bouncer/main/bootstrap.sh | BOUNCER_VERSION=v0.0.34 bash
+#   curl -sSL https://raw.githubusercontent.com/wolffcatskyy/crowdsec-unifi-bouncer/main/bootstrap.sh | BOUNCER_VERSION=v0.0.41 bash
 
 set -e
 
 REPO_URL="https://raw.githubusercontent.com/wolffcatskyy/crowdsec-unifi-bouncer/main"
 BOUNCER_DIR="/data/crowdsec-bouncer"
-BOUNCER_VERSION="${BOUNCER_VERSION:-v0.0.34}"
+BOUNCER_VERSION="${BOUNCER_VERSION:-}"
 
 # Colors for output
 RED='\033[0;31m'
