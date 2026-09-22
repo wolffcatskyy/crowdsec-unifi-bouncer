@@ -4,16 +4,11 @@ Development direction for crowdsec-unifi-bouncer.
 
 ## Current Version
 
-**v2.1.0** (February 2026) -- Sidecar Release
+**v2.5.2** (September 2026) -- Bootstrap Reliability
 
-Intelligent sidecar proxy for decision prioritization:
-- Sidecar proxy that sits between CrowdSec LAPI and the bouncer to prioritize decisions
-- 7-factor scoring algorithm: scenario multiplier, origin, TTL, decision type, freshness, CIDR size, recidivism
-- Sidecar-aware shell scripts (detect-sidecar.sh, improved capacity recommendations)
-- Updated bouncer config template with sidecar option
-- Production tested: 2 instances, 20,000+ requests, 0 failures
+The one-line bootstrap now defers to `install.sh` to resolve the latest upstream firewall-bouncer release unless `BOUNCER_VERSION` is explicitly set. This removes the stale v0.0.34 pin while preserving reproducible installs.
 
-## Next Release: v2.2.0
+## Next Release
 
 ### IPv6 Support
 - Test ip6tables rules across device models
