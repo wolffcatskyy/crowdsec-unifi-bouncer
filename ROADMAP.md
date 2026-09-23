@@ -1,5 +1,15 @@
 # Roadmap
 
+_Refreshed September 23, 2026. Plans, not promises: priorities can shift with user feedback._
+
+- Next: compatibility CI and a published device/firmware matrix for UDM, UDM SE/Pro, UDR, and UXG families.
+- Then: sidecar capacity telemetry, automatic rollback, and upgrade diagnostics.
+- Later: package an appliance-style installer while keeping the shell path transparent and auditable.
+
+---
+
+## Earlier roadmap notes
+
 Development direction for crowdsec-unifi-bouncer.
 
 ## Current Version
