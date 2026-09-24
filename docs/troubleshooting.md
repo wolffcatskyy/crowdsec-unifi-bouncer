@@ -16,11 +16,13 @@ crontab -l | grep ensure-rules
 
 ## Service gone after firmware update
 
+Firmware updates reset `/etc` and root's crontab. This re-links and enables the service, restores the cron jobs, and starts the bouncer:
+
 ```bash
-ln -sf /data/crowdsec-bouncer/crowdsec-firewall-bouncer.service /etc/systemd/system/
-systemctl daemon-reload
-systemctl start crowdsec-firewall-bouncer
+/data/crowdsec-bouncer/boot-restore.sh --boot
 ```
+
+To make it automatic, install [on-boot-script-2.x](https://github.com/unifi-utilities/unifios-utilities/tree/main/on-boot-script-2.x) and re-run `install.sh` (it adds `/data/on_boot.d/99-crowdsec-bouncer.sh`).
 
 ## Device becomes unresponsive
 
