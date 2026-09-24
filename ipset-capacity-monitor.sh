@@ -106,7 +106,12 @@ get_ipset_stats() {
 
     if ipset list "$IPSET_NAME" -t 2>/dev/null | grep -q "^Name:"; then
         entries=$(ipset list "$IPSET_NAME" -t 2>/dev/null | awk '/^Number of entries:/{print $NF}')
-        maxelem=$(ipset list "$IPSET_NAME" -t 2>/dev/null | awk '/^Maxelem:/{print $NF}')
+        # ipset 7.x (UniFi OS) prints capacity inline in the Header line; older
+        # ipset prints a standalone "Maxelem:" line. Try Header first, fall back.
+        maxelem=$(ipset list "$IPSET_NAME" -t 2>/dev/null | awk '/^Header:/{for(i=1;i<=NF;i++) if($i=="maxelem") print $(i+1)}')
+        if [ -z "$maxelem" ]; then
+            maxelem=$(ipset list "$IPSET_NAME" -t 2>/dev/null | awk '/^Maxelem:/{print $NF}')
+        fi
         entries="${entries:-0}"
         maxelem="${maxelem:-0}"
         if [ "$maxelem" -gt 0 ]; then
