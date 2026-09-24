@@ -12,7 +12,7 @@
 Drop-in install of the official [CrowdSec firewall bouncer](https://github.com/crowdsecurity/cs-firewall-bouncer) on UniFi OS devices — with persistence through reboots and controller reprovisioning, and automatic recovery after firmware updates (with on-boot-script-2.x). Includes an intelligent sidecar proxy that scores and prioritizes threats when you have more decisions than your device can hold.
 
 > [!TIP]
-> **v2.5.4 Released** — the bouncer now comes back on its own after a UniFi OS firmware update. Updates reset `/etc` and root's crontab, which used to leave the bouncer silently stopped; the installer now enables the service and, with [on-boot-script-2.x](https://github.com/unifi-utilities/unifios-utilities/tree/main/on-boot-script-2.x), hooks `boot-restore.sh` to put everything back on every boot. Thanks @RichBrew ([#46](https://github.com/wolffcatskyy/crowdsec-unifi-bouncer/discussions/46)). v2.5.3 fixed the capacity monitor reading 0% on ipset 7.x (thanks @ahmaddxb, #63). [Release notes](https://github.com/wolffcatskyy/crowdsec-unifi-bouncer/releases/tag/v2.5.4)
+> **v2.5.4 Released** — the bouncer now comes back on its own after a UniFi OS firmware update (beta: not yet verified on real hardware, [reports welcome](https://github.com/wolffcatskyy/crowdsec-unifi-bouncer/discussions/46)). Updates reset `/etc` and root's crontab, which used to leave the bouncer silently stopped; the installer now enables the service and, with [on-boot-script-2.x](https://github.com/unifi-utilities/unifios-utilities/tree/main/on-boot-script-2.x), hooks `boot-restore.sh` to put everything back on every boot. Thanks @RichBrew ([#46](https://github.com/wolffcatskyy/crowdsec-unifi-bouncer/discussions/46)). v2.5.3 fixed the capacity monitor reading 0% on ipset 7.x (thanks @ahmaddxb, #63). [Release notes](https://github.com/wolffcatskyy/crowdsec-unifi-bouncer/releases/tag/v2.5.4)
 
 > [!CAUTION]
 > **Beware of impostor repositories.** The official CrowdSec UniFi Bouncer is hosted at [`wolffcatskyy/crowdsec-unifi-bouncer`](https://github.com/wolffcatskyy/crowdsec-unifi-bouncer). We do **not** distribute ZIP file downloads or executable installers. If you see a repo offering "one-click downloads" of this project, it may contain malware. Always install via the official instructions below.
@@ -133,6 +133,9 @@ Persistence scripts keep the bouncer running through reboots and controller repr
 See [docs/architecture.md](docs/architecture.md) for the full diagram and persistence mechanism details.
 
 ### Firmware updates
+
+> [!WARNING]
+> **Beta.** This recovery path was added in v2.5.4 and has only been tested in a sandbox, not yet across a real UniFi OS firmware update. If you update firmware with it in place, please say how it went in [discussion #46](https://github.com/wolffcatskyy/crowdsec-unifi-bouncer/discussions/46), working or not: your device and firmware version, `systemctl status crowdsec-firewall-bouncer`, and `crontab -l` after the update. The beta label comes off once it's confirmed on hardware.
 
 UniFi OS firmware updates keep `/data/` but reset `/etc/` and root's crontab. That removes the bouncer's systemd service, its "enabled" link, and its cron jobs, so without help the bouncer stays stopped after an update, with no warning.
 
