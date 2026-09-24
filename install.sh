@@ -73,33 +73,41 @@ if [ ! -f "$BOUNCER_DIR/crowdsec-firewall-bouncer.yaml" ]; then
 fi
 
 # Install scripts and service files
-for script in setup.sh detect-device.sh detect-sidecar.sh ensure-rules.sh log-rules.sh ipset-capacity-monitor.sh metrics.sh crowdsec-firewall-bouncer.service crowdsec-unifi-metrics.service; do
+for script in setup.sh boot-restore.sh detect-device.sh detect-sidecar.sh ensure-rules.sh log-rules.sh ipset-capacity-monitor.sh metrics.sh crowdsec-firewall-bouncer.service crowdsec-unifi-metrics.service; do
     if [ -f "/tmp/$script" ] || [ -f "$(dirname "$0")/$script" ]; then
         cp "$(dirname "$0")/$script" "$BOUNCER_DIR/" 2>/dev/null || true
     fi
 done
-chmod +x "$BOUNCER_DIR/setup.sh" "$BOUNCER_DIR/detect-device.sh" "$BOUNCER_DIR/detect-sidecar.sh" "$BOUNCER_DIR/ensure-rules.sh" "$BOUNCER_DIR/log-rules.sh" "$BOUNCER_DIR/ipset-capacity-monitor.sh" "$BOUNCER_DIR/metrics.sh" 2>/dev/null || true
+chmod +x "$BOUNCER_DIR/setup.sh" "$BOUNCER_DIR/boot-restore.sh" "$BOUNCER_DIR/detect-device.sh" "$BOUNCER_DIR/detect-sidecar.sh" "$BOUNCER_DIR/ensure-rules.sh" "$BOUNCER_DIR/log-rules.sh" "$BOUNCER_DIR/ipset-capacity-monitor.sh" "$BOUNCER_DIR/metrics.sh" 2>/dev/null || true
 
-# Install systemd service
+# Install systemd service, enable it on boot, and install cron jobs
+# (rule persistence + capacity monitoring). boot-restore.sh is idempotent and
+# is the same script that restores all of this after a firmware update.
 cp "$BOUNCER_DIR/crowdsec-firewall-bouncer.service" /etc/systemd/system/ 2>/dev/null || \
     ln -sf "$BOUNCER_DIR/crowdsec-firewall-bouncer.service" /etc/systemd/system/crowdsec-firewall-bouncer.service
-systemctl daemon-reload
+bash "$BOUNCER_DIR/boot-restore.sh"
+echo "Service enabled on boot. Cron jobs installed."
 
-# Install cron jobs for rule persistence and capacity monitoring
-ENSURE_CRON="*/5 * * * * /data/crowdsec-bouncer/ensure-rules.sh"
-LOG_CRON="*/5 * * * * /data/crowdsec-bouncer/log-rules.sh --quiet"
-CAPACITY_CRON="*/5 * * * * /data/crowdsec-bouncer/ipset-capacity-monitor.sh --check >/dev/null 2>&1"
-if ! crontab -l 2>/dev/null | grep -q ensure-rules.sh; then
-    (crontab -l 2>/dev/null; echo "$ENSURE_CRON") | crontab -
-    echo "Rule persistence cron job installed."
-fi
-if ! crontab -l 2>/dev/null | grep -q log-rules.sh; then
-    (crontab -l 2>/dev/null; echo "$LOG_CRON") | crontab -
-    echo "LOG rule persistence cron job installed."
-fi
-if ! crontab -l 2>/dev/null | grep -q ipset-capacity-monitor; then
-    (crontab -l 2>/dev/null; echo "$CAPACITY_CRON") | crontab -
-    echo "Capacity monitoring cron job installed."
+# Survive firmware updates: UniFi OS resets /etc and root's crontab on update.
+# With unifios-utilities on-boot-script-2.x installed, hook boot-restore.sh
+# into /data/on_boot.d so everything is put back on every boot.
+ON_BOOT_DIR="/data/on_boot.d"
+ON_BOOT_HOOK="$ON_BOOT_DIR/99-crowdsec-bouncer.sh"
+if [ -d "$ON_BOOT_DIR" ]; then
+    cat > "$ON_BOOT_HOOK" <<HOOK
+#!/bin/bash
+# Installed by crowdsec-unifi-bouncer - restores the bouncer after firmware updates
+$BOUNCER_DIR/boot-restore.sh --boot
+HOOK
+    chmod +x "$ON_BOOT_HOOK"
+    echo "Firmware-update hook installed: $ON_BOOT_HOOK"
+else
+    echo ""
+    echo "WARNING: /data/on_boot.d not found. A firmware update will reset the"
+    echo "systemd service and cron jobs, and the bouncer will stay stopped until"
+    echo "you run: $BOUNCER_DIR/boot-restore.sh --boot"
+    echo "To make this automatic, install on-boot-script-2.x from"
+    echo "https://github.com/unifi-utilities/unifios-utilities and re-run install.sh."
 fi
 
 echo ""
@@ -109,9 +117,8 @@ echo "Next steps:"
 echo "  1. Edit config:    \$EDITOR $BOUNCER_DIR/crowdsec-firewall-bouncer.yaml"
 echo "  2. Set api_url and api_key"
 echo "  3. Start bouncer:  systemctl start crowdsec-firewall-bouncer"
-echo "  4. Enable on boot: systemctl enable crowdsec-firewall-bouncer"
-echo "  5. Check status:   systemctl status crowdsec-firewall-bouncer"
-echo "  6. Check logs:     tail -f $BOUNCER_DIR/log/crowdsec-firewall-bouncer.log"
+echo "  4. Check status:   systemctl status crowdsec-firewall-bouncer"
+echo "  5. Check logs:     tail -f $BOUNCER_DIR/log/crowdsec-firewall-bouncer.log"
 echo ""
 echo "Optional: Enable Prometheus metrics endpoint"
 echo "  ln -sf $BOUNCER_DIR/crowdsec-unifi-metrics.service /etc/systemd/system/"
