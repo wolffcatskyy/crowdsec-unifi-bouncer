@@ -25,18 +25,18 @@
 │  │  Firewall Bouncer   │  │  Persistence Layer           │  │
 │  │  (official Go bin)  │  │  setup.sh     → ExecStartPre │  │
 │  │  15 MB RAM          │  │  ensure-rules → cron (5 min) │  │
-│  │  ipset + iptables   │  │  /data/       → survives FW  │  │
+│  │  ipset + iptables   │  │  boot-restore → on_boot.d    │  │
+│  │                     │  │  /data/       → survives FW  │  │
 │  └─────────────────────┘  └──────────────────────────────┘  │
 └─────────────────────────────────────────────────────────────┘
 ```
 
 ## Persistence Mechanisms
 
-Three persistence mechanisms keep the bouncer running through anything UniFi OS throws at it:
-
 1. **`setup.sh` (ExecStartPre)** — runs before every bouncer start; loads ipset modules, creates ipset, adds iptables rules, re-links systemd service
 2. **`ensure-rules.sh` (cron, every 5 min)** — catches controller reprovisioning that silently removes iptables rules while the bouncer is running
 3. **Everything in `/data/crowdsec-bouncer/`** — the one persistent directory that survives firmware updates
+4. **`boot-restore.sh` (on_boot.d hook)** — firmware updates reset `/etc` and root's crontab, which removes the service link, the enable link, and the cron jobs. Mechanisms 1 and 2 can't recover from that on their own: `setup.sh` only runs when something starts the service, and `ensure-rules.sh` only acts while the bouncer is running. `boot-restore.sh` re-links and enables the service, restores the cron jobs, and starts the bouncer. It runs on every boot when [on-boot-script-2.x](https://github.com/unifi-utilities/unifios-utilities/tree/main/on-boot-script-2.x) is installed (`/data/on_boot.d/99-crowdsec-bouncer.sh`, added by `install.sh`); without it, run `boot-restore.sh --boot` by hand after an update.
 
 ## Resource Usage
 
