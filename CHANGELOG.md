@@ -5,6 +5,11 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [2.5.3] - 2026-09-24
+
+### Fixed
+- **Capacity monitor always reported 0% fill on ipset 7.x (UniFi OS)** - `ipset-capacity-monitor.sh` parsed maxelem only from a standalone `Maxelem:` line, which ipset 7.x never prints (capacity is inline in the `Header:` line). Result: `Entries: N / 0`, `Fill Ratio: 0%`, and the 90%/95% warnings never fired even near full. Now parses `maxelem` from the `Header:` line with a fallback to the legacy `Maxelem:` line. Reported and root-caused by @ahmaddxb with a tested fix. (Closes #63)
+
 ## [2.5.2] - 2026-09-22
 
 ### Fixed
