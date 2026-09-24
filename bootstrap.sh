@@ -65,6 +65,7 @@ download() {
 FILES=(
     "install.sh"
     "setup.sh"
+    "boot-restore.sh"
     "detect-device.sh"
     "detect-sidecar.sh"
     "ensure-rules.sh"
@@ -90,6 +91,7 @@ done
 # Make scripts executable
 chmod +x "$BOUNCER_DIR/install.sh" \
          "$BOUNCER_DIR/setup.sh" \
+         "$BOUNCER_DIR/boot-restore.sh" \
          "$BOUNCER_DIR/detect-device.sh" \
          "$BOUNCER_DIR/detect-sidecar.sh" \
          "$BOUNCER_DIR/ensure-rules.sh" \
