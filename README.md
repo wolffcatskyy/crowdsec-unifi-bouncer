@@ -9,10 +9,10 @@
 [![Docker Publish](https://github.com/wolffcatskyy/crowdsec-unifi-bouncer/actions/workflows/docker-publish.yml/badge.svg)](https://github.com/wolffcatskyy/crowdsec-unifi-bouncer/actions/workflows/docker-publish.yml)
 [![Mentioned in Awesome UniFi](https://awesome.re/mentioned-badge-flat.svg)](https://github.com/wolffcatskyy/awesome-unifi)
 
-Drop-in install of the official [CrowdSec firewall bouncer](https://github.com/crowdsecurity/cs-firewall-bouncer) on UniFi OS devices — with persistence that survives firmware updates, reboots, and controller reprovisioning. Includes an intelligent sidecar proxy that scores and prioritizes threats when you have more decisions than your device can hold.
+Drop-in install of the official [CrowdSec firewall bouncer](https://github.com/crowdsecurity/cs-firewall-bouncer) on UniFi OS devices — with persistence through reboots and controller reprovisioning, and automatic recovery after firmware updates (with on-boot-script-2.x). Includes an intelligent sidecar proxy that scores and prioritizes threats when you have more decisions than your device can hold.
 
 > [!TIP]
-> **v2.5.2 Released** — the one-line bootstrap now installs the latest upstream firewall bouncer by default instead of pinning an obsolete release. Automatically report locally-banned IPs to AbuseIPDB, contributing your CrowdSec detections to community threat intelligence. See [AbuseIPDB Reporting](docs/abuseipdb.md) to enable it. [Release notes](https://github.com/wolffcatskyy/crowdsec-unifi-bouncer/releases/tag/v2.5.2)
+> **v2.5.4 Released** — the bouncer now comes back on its own after a UniFi OS firmware update. Updates reset `/etc` and root's crontab, which used to leave the bouncer silently stopped; the installer now enables the service and, with [on-boot-script-2.x](https://github.com/unifi-utilities/unifios-utilities/tree/main/on-boot-script-2.x), hooks `boot-restore.sh` to put everything back on every boot. Thanks @RichBrew ([#46](https://github.com/wolffcatskyy/crowdsec-unifi-bouncer/discussions/46)). v2.5.3 fixed the capacity monitor reading 0% on ipset 7.x (thanks @ahmaddxb, #63). [Release notes](https://github.com/wolffcatskyy/crowdsec-unifi-bouncer/releases/tag/v2.5.4)
 
 > [!CAUTION]
 > **Beware of impostor repositories.** The official CrowdSec UniFi Bouncer is hosted at [`wolffcatskyy/crowdsec-unifi-bouncer`](https://github.com/wolffcatskyy/crowdsec-unifi-bouncer). We do **not** distribute ZIP file downloads or executable installers. If you see a repo offering "one-click downloads" of this project, it may contain malware. Always install via the official instructions below.
@@ -27,7 +27,7 @@ Drop-in install of the official [CrowdSec firewall bouncer](https://github.com/c
 ## Key Features
 
 - **One-line install** — `curl | bash` bootstrap onto any supported UniFi device
-- **Firmware-proof persistence** — survives UniFi OS updates, reboots, and controller reprovisioning
+- **Persistence** — survives reboots and controller reprovisioning; recovers after UniFi OS updates via an on_boot.d hook (see [Firmware updates](#firmware-updates))
 - **Auto-detection** — identifies your device model and applies safe ipset limits automatically
 - **Sidecar proxy** — scores 120K+ decisions across 7 factors, fits the highest-priority threats into your device's capacity
 - **Stream-aware capping** (v2.3.0) — prevents ipset overflow on high-churn CAPI streams with configurable eviction
@@ -87,7 +87,7 @@ systemctl start crowdsec-firewall-bouncer
 ipset list crowdsec-blacklists -t | grep "Number of entries"
 ```
 
-That's it. The bouncer auto-detects your device, sets safe ipset limits, and persists across firmware updates.
+That's it. The bouncer auto-detects your device, sets safe ipset limits, and starts on every boot. To have it come back on its own after firmware updates, see [Firmware updates](#firmware-updates).
 
 ## Installation
 
@@ -128,9 +128,24 @@ See the [full configuration reference](docs/configuration.md) for all settings, 
 
 ## Architecture
 
-Three persistence mechanisms keep the bouncer running through firmware updates and controller reprovisioning. An optional sidecar proxy scores 120K+ decisions across 7 factors so your device's limited ipset always holds the highest-priority threats.
+Persistence scripts keep the bouncer running through reboots and controller reprovisioning, and restore it after firmware updates. An optional sidecar proxy scores 120K+ decisions across 7 factors so your device's limited ipset always holds the highest-priority threats.
 
 See [docs/architecture.md](docs/architecture.md) for the full diagram and persistence mechanism details.
+
+### Firmware updates
+
+UniFi OS firmware updates keep `/data/` but reset `/etc/` and root's crontab. That removes the bouncer's systemd service, its "enabled" link, and its cron jobs, so without help the bouncer stays stopped after an update, with no warning.
+
+`boot-restore.sh` puts all of that back and starts the bouncer. To run it automatically on every boot:
+
+1. Install [on-boot-script-2.x](https://github.com/unifi-utilities/unifios-utilities/tree/main/on-boot-script-2.x) from unifios-utilities.
+2. Re-run the installer. When `/data/on_boot.d` exists, it adds `/data/on_boot.d/99-crowdsec-bouncer.sh`.
+
+Without on-boot-script, run this after each firmware update:
+
+```bash
+/data/crowdsec-bouncer/boot-restore.sh --boot
+```
 
 ## Device Compatibility
 
@@ -161,7 +176,7 @@ The `log-rules.sh` script solves this by inserting iptables LOG rules immediatel
 - AbuseIPDB reporting of detected attacks (via the sidecar)
 - CAPI contribution (sharing your detections with the CrowdSec community)
 
-LOG rules are automatically maintained by `ensure-rules.sh` (runs every 5 minutes via cron), so they survive reboots and firmware updates. They are rate-limited (10/min burst 20) to avoid log flooding.
+LOG rules are automatically maintained by `ensure-rules.sh` (runs every 5 minutes via cron), so they survive reboots and rule flushes (after a firmware update the cron job is restored by `boot-restore.sh`). They are rate-limited (10/min burst 20) to avoid log flooding.
 
 **Setup:** LOG rules are deployed automatically during installation. To check status or manage manually:
 
