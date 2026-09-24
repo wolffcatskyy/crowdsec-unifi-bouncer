@@ -5,6 +5,18 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [2.5.4] - 2026-09-24
+
+### Fixed
+- **Bouncer stayed stopped after a UniFi OS firmware update** - Updates keep `/data/` but reset `/etc/` and root's crontab, removing the systemd unit link, the enable link, and the cron jobs. `setup.sh` only runs when the service starts and `ensure-rules.sh` only acts while the bouncer is running, so nothing brought it back and nothing warned. `install.sh` also never ran `systemctl enable`. Reported with a clear write-up by @RichBrew (discussion #46).
+
+### Added
+- `boot-restore.sh` - idempotent: re-links and enables the service, restores the cron jobs, and with `--boot` starts the bouncer.
+- `install.sh` now enables the service and, when unifios-utilities on-boot-script-2.x is present (`/data/on_boot.d`), installs `/data/on_boot.d/99-crowdsec-bouncer.sh` so this runs on every boot. Without it, the installer warns and prints the manual command.
+
+### Changed
+- README and docs no longer claim "firmware-proof" persistence without on-boot-script; new Firmware updates section.
+
 ## [2.5.3] - 2026-09-24
 
 ### Fixed
@@ -94,6 +106,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Cron-based iptables rule recovery
 - ipset capacity monitoring with Prometheus metrics
 
+[2.5.4]: https://github.com/wolffcatskyy/crowdsec-unifi-bouncer/compare/v2.5.3...v2.5.4
 [2.5.0]: https://github.com/wolffcatskyy/crowdsec-unifi-bouncer/compare/v2.4.0...v2.5.0
 [2.4.0]: https://github.com/wolffcatskyy/crowdsec-unifi-bouncer/compare/v2.3.0...v2.4.0
 [2.3.0]: https://github.com/wolffcatskyy/crowdsec-unifi-bouncer/compare/v2.2.0...v2.3.0
