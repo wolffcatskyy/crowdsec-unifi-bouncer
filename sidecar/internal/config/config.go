@@ -17,6 +17,7 @@ type Config struct {
 	UpstreamLAPIURL string        `yaml:"upstream_lapi_url"`
 	UpstreamLAPIKey string        `yaml:"upstream_lapi_key"`
 	MaxDecisions    int           `yaml:"max_decisions"`
+	MaxDecisionsV6  int           `yaml:"max_decisions_v6"`
 	EvictionMode    string        `yaml:"eviction_mode"` // "cap" (default) or "evict"
 	CacheTTL        time.Duration `yaml:"cache_ttl"`
 	UpstreamTimeout time.Duration `yaml:"upstream_timeout"`
@@ -188,6 +189,16 @@ func Load(path string) (*Config, error) {
 	return cfg, nil
 }
 
+// EffectiveMaxDecisionsV6 returns the IPv6 decision cap. The v4 and v6
+// ipsets have separate maxelem, so their caps are independent; when
+// max_decisions_v6 is unset (0) it falls back to max_decisions.
+func (c *Config) EffectiveMaxDecisionsV6() int {
+	if c.MaxDecisionsV6 > 0 {
+		return c.MaxDecisionsV6
+	}
+	return c.MaxDecisions
+}
+
 // Validate checks that the configuration is valid.
 func (c *Config) Validate() error {
 	if c.ListenAddr == "" {
@@ -201,6 +212,9 @@ func (c *Config) Validate() error {
 	}
 	if c.MaxDecisions <= 0 {
 		return fmt.Errorf("max_decisions must be positive")
+	}
+	if c.MaxDecisionsV6 < 0 {
+		return fmt.Errorf("max_decisions_v6 cannot be negative")
 	}
 	if c.CacheTTL < 0 {
 		return fmt.Errorf("cache_ttl cannot be negative")
