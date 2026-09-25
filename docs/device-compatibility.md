@@ -2,6 +2,43 @@
 
 The bouncer auto-detects your UniFi device model on startup and applies safe default ipset limits based on [Ubiquiti's CyberSecure IPS signature capacity specifications](https://help.ui.com/hc/en-us/articles/25930305913751).
 
+## Measured capacity (one canonical table)
+
+Where do the numbers come from? Three sources have circulated in this repo, and
+they did not agree. This table reconciles them:
+
+- **Measured** values come from real-device testing reported in
+  [#28](https://github.com/wolffcatskyy/crowdsec-unifi-bouncer/issues/28):
+  `hash:net` ipset uses ~46 bytes of kernel memory per entry, and the practical
+  ceiling is set by UniFi Network application stability, not RAM (the Network
+  app crashes when entry counts exceed what the device handles).
+- **Spec-derived** values are the conservative defaults below, based on
+  Ubiquiti's published IPS signature capacity per tier.
+- **Estimate** values are extrapolations with no device testing behind them.
+
+| Device | RAM | Safe maxelem (measured) | Basis | Current default |
+|--------|-----|------------------------|-------|-----------------|
+| UDM SE | 4 GB | 120,000 | **Measured** — stable at 60K active entries (#28) | 50,000 |
+| UDM Pro | 4 GB | 120,000 | **Estimate** — same hardware class as UDM SE (#28) | 50,000 |
+| UDR | ~1 GB | 40,000 | **Measured** — stable at 20K active entries (#28) | 15,000 |
+| USG-3P | 512 MB | ~15,000 | **Estimate** — untested, use caution (#28) | n/a (legacy) |
+| EFG / UXG-Enterprise | -- | 80,000 | **Spec-derived** (Ubiquiti IPS capacity), untested with this bouncer | 80,000 |
+| Other Pro tier (UDM-Pro-Max, UDW, UCG-*, UXG-*) | -- | 50,000 | **Spec-derived**, untested with this bouncer | 50,000 |
+| Other Consumer tier (UDM, UDR7, UX7) | -- | 15,000 | **Spec-derived**, untested with this bouncer | 15,000 |
+
+Notes:
+
+- The current defaults are deliberately **below** the measured ceilings. If you
+  want the measured headroom on a tested device, set `MAXELEM_OVERRIDE` (and
+  the sidecar's `max_decisions` to match, minus 2,000 headroom for manual bans).
+- Memory is a secondary constraint: 120K entries is only ~5.5 MB of kernel
+  memory. The primary constraint is Network app stability — raise limits
+  incrementally and watch the controller.
+- Older claims you may still see quoted: "15K-30K entries depending on model"
+  (old README), "120K+ capacity" (v2.0 notes, applies to UDM SE-class hardware
+  only), and "50K/80K" (spec-derived defaults). The table above supersedes them.
+
+
 ## Detection Methods
 
 Detection is tried in order:

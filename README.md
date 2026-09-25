@@ -50,6 +50,7 @@ Drop-in install of the official [CrowdSec firewall bouncer](https://github.com/c
 - [LOG Rules for Detection](#log-rules-for-detection)
 - [Prometheus Metrics](docs/metrics.md)
 - [Troubleshooting](docs/troubleshooting.md)
+- [Uninstalling](#uninstalling)
 - [Migration from v1.x](#migration-from-python-bouncer)
 - [Related Projects](#complete-unifi--crowdsec-suite)
 - [Contributing](#contributing)
@@ -60,7 +61,7 @@ Two problems, one project.
 
 **Problem 1: Persistence.** The official bouncer binary works perfectly on UniFi devices, but UniFi OS doesn't make it easy to keep it running. Firmware updates wipe your iptables rules. Controller reprovisioning silently removes custom firewall rules. Systemd service links disappear. You install it, it works, then one day it's quietly stopped blocking anything.
 
-**Problem 2: Capacity.** CrowdSec's community blocklist (CAPI) can push 100,000+ decisions to your bouncer. UniFi devices have hardware-limited ipset capacity (15K-30K entries depending on model). When the ipset fills up, new IPs fail silently — "Hash is full" errors buried in the log, zero alerting, and your most dangerous new threats get dropped while stale entries from last month sit in the set.
+**Problem 2: Capacity.** CrowdSec's community blocklist (CAPI) can push 100,000+ decisions to your bouncer. UniFi devices have hardware-limited ipset capacity — safe limits range from ~15K entries on consumer hardware to 120K measured on a UDM SE (see the [measured capacity table](docs/device-compatibility.md#measured-capacity-one-canonical-table)). When the ipset fills up, new IPs fail silently — "Hash is full" errors buried in the log, zero alerting, and your most dangerous new threats get dropped while stale entries from last month sit in the set.
 
 **The solution:** An installer, persistence scripts, and an optional sidecar proxy that handles all of this. Install once, forget about it.
 
@@ -210,6 +211,14 @@ See [docs/metrics.md](docs/metrics.md) for the full metrics reference.
 Common issues: bouncer starts but no IPs blocked, iptables rules disappearing, service lost after firmware update, sidecar 502s, ipset full.
 
 See [docs/troubleshooting.md](docs/troubleshooting.md) for diagnostics and solutions.
+
+## Uninstalling
+
+```bash
+/data/crowdsec-bouncer/uninstall.sh
+```
+
+Removes the services, cron jobs, firmware-update hook, iptables rules, ipset, and `/data/crowdsec-bouncer`. Use `--keep-config` to keep your config and logs, and `--dry-run` to preview. Remember to also delete the bouncer from your LAPI (`cscli bouncers delete <name>`).
 
 ## Migration from Python Bouncer
 
