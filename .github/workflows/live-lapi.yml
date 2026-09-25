@@ -29,14 +29,11 @@ jobs:
           python-version: '3.11'
 
       - name: Clone crowdsec-blocklist-import
-        # Prefer the feature branch while it exists; fall back to main once
-        # the structured-format feature has merged there.
+        # Pin to the #109 merge commit until the v3.9 tag is released.
         run: |
           git clone --quiet https://github.com/wolffcatskyy/crowdsec-blocklist-import.git importer
           cd importer
-          if git ls-remote --exit-code --heads origin feat/structured-scenarios > /dev/null; then
-            git checkout --quiet feat/structured-scenarios
-          fi
+          git checkout --quiet --detach 2bb1d7d9e26001988d0453b9383e7ec20a99c4d4
           grep -q SCENARIO_FORMAT blocklist_import.py
           pip install -r requirements.txt
 
