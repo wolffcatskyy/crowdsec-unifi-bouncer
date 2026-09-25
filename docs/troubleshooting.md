@@ -22,6 +22,12 @@ Check that the crowdsec DROP rules sit above UniFi's firewall and zone chains:
 /data/crowdsec-bouncer/ipset-capacity-monitor.sh --placement
 ```
 
+Since v2.6, `ensure-rules.sh` also fixes drift itself: every 5 minutes it moves
+a displaced DROP rule back to position 1 of `INPUT`/`FORWARD` and records the
+check result as the `crowdsec_unifi_bouncer_rule_placement_ok` /
+`_rule_placement_warnings` gauges on the metrics endpoint (alert on
+`crowdsec_unifi_bouncer_rule_placement_ok == 0`).
+
 See [zone-placement.md](zone-placement.md) for what the warnings mean.
 
 ## Service gone after firmware update
