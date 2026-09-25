@@ -30,6 +30,10 @@ type Decision struct {
 
 	// Calculated score
 	Score int `json:"-"`
+
+	// Feed is the blocklist-import feed slug parsed from Scenario by the
+	// scorer ("" for decisions that did not come from blocklist-import).
+	Feed string `json:"-"`
 }
 
 // Client is an HTTP client for the CrowdSec LAPI.
