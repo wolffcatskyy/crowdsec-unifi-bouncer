@@ -51,6 +51,7 @@ type ScoringConfig struct {
 	FreshnessBonuses   []FreshnessBonus `yaml:"freshness_bonuses"`
 	CIDRBonuses        []CIDRBonus      `yaml:"cidr_bonuses"`
 	RecidivismBonus    int              `yaml:"recidivism_bonus"`
+	FeedScoring        FeedScoringConfig `yaml:"feed_scoring"`
 
 	// Compiled regex patterns (not from YAML)
 	compiledScenarios []scenarioPattern
@@ -67,6 +68,41 @@ type TTLScoringConfig struct {
 	Enabled  bool          `yaml:"enabled"`
 	MaxBonus int           `yaml:"max_bonus"`
 	MaxTTL   time.Duration `yaml:"max_ttl"`
+}
+
+// FeedScoringConfig ranks crowdsec-blocklist-import decisions by the quality
+// of the feed they came from. Feed and confidence are read from the scenario
+// name (see internal/feed). The adjustment is a penalty only: a decision from
+// a 100-confidence feed keeps its score, a 0-confidence feed loses MaxPenalty
+// points. Imported IPs therefore never climb above where they scored before,
+// so local detections, manual bans and CAPI keep their priority.
+// Decisions with no known confidence are left untouched.
+type FeedScoringConfig struct {
+	Enabled bool `yaml:"enabled"`
+	// MaxPenalty is the points removed from a 0-confidence feed decision.
+	MaxPenalty int `yaml:"max_penalty"`
+	// Prefixes are the structured scenario prefixes to recognize
+	// (<prefix>/<feed-slug>[/c<confidence>]).
+	Prefixes []string `yaml:"prefixes"`
+	// LegacyPrefixes are the legacy scenario bases to recognize
+	// ("<base> (<Feed Name>)"). Legacy names carry no confidence, so they
+	// only get adjusted when the feed slug is listed in Feeds.
+	LegacyPrefixes []string `yaml:"legacy_prefixes"`
+	// Feeds overrides confidence per feed slug (0-100). Takes precedence over
+	// the confidence embedded in the scenario name.
+	Feeds map[string]int `yaml:"feeds"`
+}
+
+// Penalty returns the points to subtract for a feed with the given confidence.
+func (f *FeedScoringConfig) Penalty(confidence int) int {
+	if confidence < 0 {
+		confidence = 0
+	}
+	if confidence > 100 {
+		confidence = 100
+	}
+	// Round half up: (100-c)*max/100
+	return ((100-confidence)*f.MaxPenalty + 50) / 100
 }
 
 // HealthConfig controls the health check endpoint.
@@ -127,6 +163,12 @@ func Load(path string) (*Config, error) {
 		Scoring: ScoringConfig{
 			ScenarioMultiplier: 2.0,
 			RecidivismBonus:    15,
+			FeedScoring: FeedScoringConfig{
+				Enabled:        true,
+				MaxPenalty:     30,
+				Prefixes:       []string{"external/blocklist-import"},
+				LegacyPrefixes: []string{"external/blocklist"},
+			},
 			TTLScoring: TTLScoringConfig{
 				Enabled:  true,
 				MaxBonus: 10,
@@ -207,6 +249,14 @@ func (c *Config) Validate() error {
 	}
 	if c.EvictionMode != "" && c.EvictionMode != "cap" && c.EvictionMode != "evict" {
 		return fmt.Errorf("eviction_mode must be 'cap' or 'evict', got %q", c.EvictionMode)
+	}
+	if c.Scoring.FeedScoring.MaxPenalty < 0 {
+		return fmt.Errorf("scoring.feed_scoring.max_penalty cannot be negative")
+	}
+	for slug, conf := range c.Scoring.FeedScoring.Feeds {
+		if conf < 0 || conf > 100 {
+			return fmt.Errorf("scoring.feed_scoring.feeds[%q] must be 0-100, got %d", slug, conf)
+		}
 	}
 	return nil
 }
