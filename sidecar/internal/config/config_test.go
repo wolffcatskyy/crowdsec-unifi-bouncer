@@ -492,3 +492,74 @@ func TestScoringConfig_GetScenarioMultiplier(t *testing.T) {
 		t.Errorf("GetScenarioMultiplier() default = %v, want 2.0", got)
 	}
 }
+
+func TestLoad_FeedScoring(t *testing.T) {
+	base := `
+upstream_lapi_url: "http://localhost:8080"
+upstream_lapi_key: "k"
+`
+	load := func(t *testing.T, extra string) (*Config, error) {
+		t.Helper()
+		p := filepath.Join(t.TempDir(), "config.yaml")
+		if err := os.WriteFile(p, []byte(base+extra), 0644); err != nil {
+			t.Fatal(err)
+		}
+		return Load(p)
+	}
+
+	t.Run("defaults", func(t *testing.T) {
+		cfg, err := load(t, "")
+		if err != nil {
+			t.Fatal(err)
+		}
+		fs := cfg.Scoring.FeedScoring
+		if !fs.Enabled || fs.MaxPenalty != 30 {
+			t.Errorf("defaults: enabled=%v max_penalty=%d, want true/30", fs.Enabled, fs.MaxPenalty)
+		}
+		if len(fs.Prefixes) != 1 || fs.Prefixes[0] != "external/blocklist-import" {
+			t.Errorf("default prefixes = %v", fs.Prefixes)
+		}
+		if len(fs.LegacyPrefixes) != 1 || fs.LegacyPrefixes[0] != "external/blocklist" {
+			t.Errorf("default legacy_prefixes = %v", fs.LegacyPrefixes)
+		}
+	})
+
+	t.Run("overrides", func(t *testing.T) {
+		cfg, err := load(t, `
+scoring:
+  feed_scoring:
+    enabled: false
+    max_penalty: 50
+    feeds:
+      tor-exit-nodes: 10
+`)
+		if err != nil {
+			t.Fatal(err)
+		}
+		fs := cfg.Scoring.FeedScoring
+		if fs.Enabled || fs.MaxPenalty != 50 || fs.Feeds["tor-exit-nodes"] != 10 {
+			t.Errorf("overrides not applied: %+v", fs)
+		}
+	})
+
+	t.Run("invalid confidence", func(t *testing.T) {
+		if _, err := load(t, `
+scoring:
+  feed_scoring:
+    feeds:
+      tor-exit-nodes: 120
+`); err == nil {
+			t.Error("expected error for confidence > 100")
+		}
+	})
+
+	t.Run("negative penalty", func(t *testing.T) {
+		if _, err := load(t, `
+scoring:
+  feed_scoring:
+    max_penalty: -1
+`); err == nil {
+			t.Error("expected error for negative max_penalty")
+		}
+	})
+}
