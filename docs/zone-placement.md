@@ -32,11 +32,13 @@ side of this document rests on community captures.
 5. Every public capture we found, including one from UniFi OS 5.1.12 in this
    repo's issue tracker, still shows legacy iptables with `UBIOS_*` chains. We
    found no evidence that UniFi OS 5 moved to nftables. **[community]**
-6. The one real weak spot: `ensure-rules.sh` checks that the rule **exists**
-   (`iptables -C`), not that it is **first**. If UniFi ever re-inserts its
-   jumps above ours without flushing, the rule would sit below the zone chains
-   and nothing would notice. The new check warns about exactly that.
-   Whether UniFi actually does this is **[unverified]**.
+6. The one real weak spot was that `ensure-rules.sh` checked that the rule
+   **exists** (`iptables -C`), not that it is **first**. If UniFi ever
+   re-inserts its jumps above ours without flushing, the rule would sit below
+   the zone chains. Since v2.6, `ensure-rules.sh` moves a displaced rule back
+   to position 1, and the `--placement` check runs on the same 5-minute cron
+   feeding the `crowdsec_unifi_bouncer_rule_placement_ok` metric. Whether
+   UniFi actually displaces the rule is still **[unverified]**.
 
 ## What the bouncer installs
 
