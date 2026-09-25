@@ -39,6 +39,14 @@ Notes:
   only), and "50K/80K" (spec-derived defaults). The table above supersedes them.
 
 
+## UniFi OS 5.x
+
+**OS 5.x: iptables confirmed.** A community capture from a UCG Fiber on UniFi OS
+5.1.12 (Network 10.4.57, [issue #50](https://github.com/wolffcatskyy/crowdsec-unifi-bouncer/issues/50))
+shows the legacy iptables backend with all seven `UBIOS_WAN_*_USER` chains
+present - the same layout this bouncer installs into on OS 4.x. No public
+evidence that UniFi OS 5 moved to nftables. Details: [zone-placement.md](zone-placement.md).
+
 ## Detection Methods
 
 Detection is tried in order:
