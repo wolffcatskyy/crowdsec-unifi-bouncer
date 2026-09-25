@@ -11,6 +11,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - `ipset-capacity-monitor.sh --placement` - read-only check that the crowdsec DROP rules sit above UniFi's firewall/zone chains in `INPUT` and `FORWARD`. Warns if a rule is missing, below a UniFi jump or an ACCEPT, or if native nftables tables appear. Also shown in `--status`.
 - `docs/zone-placement.md` - where the bouncer's rules land relative to UniFi's legacy and zone-based firewall chains on UniFi OS 4 vs 5, sourced and tagged by confidence, plus what would change under nftables.
 
+### Fixed
+- **`ensure-rules.sh` only checked that the DROP rules exist, not that they are first.** If UniFi reprovisioning inserted its own jumps above the bouncer's rules without flushing, the DROPs would sit below the zone chains - where an allow policy can accept a banned source - and nothing would notice. `ensure-rules.sh` (and `setup.sh`) now move a displaced rule back to position 1 of `INPUT`/`FORWARD`, not just re-add missing ones.
+
+### Added
+- **Placement drift monitoring on the 5-minute cron.** `ensure-rules.sh` now runs the `--placement` check every cycle and records the warning count, so drift is caught even when nobody runs the check by hand. New metrics-endpoint gauges: `crowdsec_unifi_bouncer_rule_placement_ok` (1=ok, 0=drift), `crowdsec_unifi_bouncer_rule_placement_warnings`, and `crowdsec_unifi_bouncer_rule_placement_last_check_timestamp`.
+
 ## [2.5.4] - 2026-09-24
 
 ### Fixed
