@@ -10,6 +10,7 @@
 #   ./ipset-capacity-monitor.sh              # One-shot check (for cron)
 #   ./ipset-capacity-monitor.sh --watch      # Continuous monitoring (for systemd)
 #   ./ipset-capacity-monitor.sh --status     # Show current capacity status
+#   ./ipset-capacity-monitor.sh --placement  # Check DROP rule placement vs UniFi zone chains
 #
 # Environment variables:
 #   BOUNCER_DIR       - Installation directory (default: /data/crowdsec-bouncer)
@@ -244,6 +245,149 @@ check_capacity() {
     return 0
 }
 
+# --- Rule placement relative to UniFi zone chains ---------------------------
+# Read-only check. The bouncer's DROP rules are meant to sit at the very top of
+# the built-in INPUT and FORWARD chains, ahead of every UniFi-managed jump
+# (TOR, ALIEN, IPS/LO_IPS, UBIOS_INPUT_JUMP, UBIOS_FORWARD_JUMP). All UniFi
+# firewall policies, legacy rules and zone-based policies alike, are reached
+# through those jumps. If a DROP ends up below them, a zone "allow" policy
+# (port forward, Allow Return Traffic, ...) can accept a banned source first.
+# Background and sources: docs/zone-placement.md
+#
+# IPTABLES / NFT / IPSET_CMD can be overridden (used for testing).
+IPTABLES="${IPTABLES:-iptables}"
+NFT="${NFT:-nft}"
+IPSET_CMD="${IPSET_CMD:-ipset}"
+UNIFI_TARGET_RE='^(UBIOS_[A-Za-z0-9_]+|ALIEN|TOR|IPS|LO_IPS)$'
+
+# Print placement of the crowdsec DROP rule within one built-in chain.
+# Returns the number of warnings found (0 = OK).
+check_chain_placement() {
+    local chain="$1"
+    local rules line target
+    local idx=0 cs_pos=0 cs_count=0
+    local unifi_pos=0 unifi_target="" accept_pos=0
+
+    rules=$("$IPTABLES" -S "$chain" 2>/dev/null || true)
+    while IFS= read -r line; do
+        case "$line" in
+            "-A $chain "*) ;;
+            *) continue ;;
+        esac
+        idx=$((idx + 1))
+        target=$(sed -n 's/.* -[jg] \([^ ]*\).*/\1/p' <<< "$line")
+        if [[ "$line" == *"--match-set $IPSET_NAME src"* ]] && [ "$target" = "DROP" ]; then
+            cs_count=$((cs_count + 1))
+            [ "$cs_pos" -eq 0 ] && cs_pos=$idx
+            continue
+        fi
+        if [ "$unifi_pos" -eq 0 ] && [[ "$target" =~ $UNIFI_TARGET_RE ]]; then
+            unifi_pos=$idx
+            unifi_target="$target"
+        fi
+        if [ "$accept_pos" -eq 0 ] && [ "$target" = "ACCEPT" ]; then
+            accept_pos=$idx
+        fi
+    done <<< "$rules"
+
+    local warn=0 misplaced=0
+    if [ "$cs_pos" -eq 0 ]; then
+        echo "  [WARN] $chain: no crowdsec DROP rule (ensure-rules.sh re-adds it within 5 min while the bouncer runs)"
+        return 1
+    fi
+
+    if [ "$unifi_pos" -gt 0 ] && [ "$cs_pos" -gt "$unifi_pos" ]; then
+        echo "  [WARN] $chain: crowdsec DROP is rule $cs_pos, below UniFi chain $unifi_target (rule $unifi_pos)."
+        echo "         UniFi zone policies run first, so an allow policy can accept banned IPs."
+        warn=$((warn + 1))
+        misplaced=1
+    fi
+    if [ "$accept_pos" -gt 0 ] && [ "$cs_pos" -gt "$accept_pos" ]; then
+        echo "  [WARN] $chain: an ACCEPT rule (rule $accept_pos) comes before the crowdsec DROP (rule $cs_pos)."
+        warn=$((warn + 1))
+        misplaced=1
+    fi
+    if [ "$unifi_pos" -eq 0 ]; then
+        echo "  [WARN] $chain: no UniFi jump chains (UBIOS_*, TOR, ALIEN, IPS) found."
+        echo "         This is not the UniFi OS layout this check knows. Possible nftables move; see docs/zone-placement.md."
+        warn=$((warn + 1))
+    fi
+    if [ "$misplaced" -eq 1 ]; then
+        echo "         To move it back to the top:"
+        echo "           iptables -D $chain -m set --match-set $IPSET_NAME src -j DROP"
+        echo "           iptables -I $chain 1 -m set --match-set $IPSET_NAME src -j DROP"
+    elif [ "$warn" -eq 0 ]; then
+        echo "  [OK]   $chain: crowdsec DROP is rule $cs_pos of $idx, ahead of $unifi_target (rule $unifi_pos)"
+    fi
+    if [ "$cs_count" -gt 1 ]; then
+        echo "  [INFO] $chain: $cs_count copies of the crowdsec DROP rule (harmless, but unexpected)"
+    fi
+    return "$warn"
+}
+
+check_rule_placement() {
+    local warnings=0 chain rc
+
+    echo "=== Rule Placement (vs UniFi firewall/zone chains) ==="
+    echo ""
+
+    if ! command -v "$IPTABLES" >/dev/null 2>&1; then
+        echo "  [WARN] $IPTABLES not found - cannot check rule placement"
+        return 1
+    fi
+
+    local ipt_version backend="legacy"
+    ipt_version=$("$IPTABLES" -V 2>/dev/null || true)
+    case "$ipt_version" in
+        *nf_tables*) backend="nf_tables" ;;
+    esac
+    echo "  iptables:      ${ipt_version:-unknown} (backend: $backend)"
+
+    # Firewall model, informational only. UBIOS_local_zoned_subnets is an ipset
+    # UniFi creates for zone-based firewall dispatch (community-observed, see docs).
+    local fw_model="legacy rules or unknown"
+    local set_names=""
+    if command -v "$IPSET_CMD" >/dev/null 2>&1; then
+        set_names=$("$IPSET_CMD" list -n 2>/dev/null || true)
+    fi
+    if grep -qx 'UBIOS_local_zoned_subnets' <<< "$set_names"; then
+        fw_model="zone-based (heuristic)"
+    fi
+    local zone_chain_count
+    zone_chain_count=$("$IPTABLES" -S 2>/dev/null \
+        | awk '$1=="-N" && $2 ~ /^UBIOS_[A-Z0-9]+_[A-Z0-9]+_USER$/ {n++} END {print n+0}' || true)
+    echo "  Firewall:      $fw_model, $zone_chain_count UBIOS_*_USER policy chains"
+
+    # Native nftables tables that the iptables view cannot see.
+    if command -v "$NFT" >/dev/null 2>&1; then
+        local native_tables
+        native_tables=$("$NFT" list tables 2>/dev/null \
+            | awk '$1=="table" && !($2 ~ /^(ip|ip6|arp|bridge)$/ && $3 ~ /^(filter|nat|mangle|raw|security|broute)$/) {printf "%s %s, ", $2, $3}' \
+            | sed 's/, $//' || true)
+        if [ -n "$native_tables" ]; then
+            echo "  [WARN] Native nftables tables present: $native_tables"
+            echo "         Rules there are not visible to this check. A drop in any table is final,"
+            echo "         but this is not the layout the bouncer was built for. See docs/zone-placement.md."
+            warnings=$((warnings + 1))
+        fi
+    fi
+    echo ""
+
+    for chain in INPUT FORWARD; do
+        rc=0
+        check_chain_placement "$chain" || rc=$?
+        warnings=$((warnings + rc))
+    done
+
+    echo ""
+    if [ "$warnings" -gt 0 ]; then
+        echo "Placement: WARNING ($warnings issue(s))"
+        return 1
+    fi
+    echo "Placement: OK"
+    return 0
+}
+
 # Show current status
 show_status() {
     init_state
@@ -340,6 +484,9 @@ show_status() {
             echo "$recent" | sed 's/^/  /'
         fi
     fi
+
+    echo ""
+    check_rule_placement || true
 }
 
 # Continuous watch mode (for systemd service)
@@ -385,6 +532,9 @@ case "${1:-}" in
     --check)
         check_capacity
         ;;
+    --placement)
+        check_rule_placement
+        ;;
     --record-dropped)
         shift
         record_capacity_event "${1:-1}"
@@ -399,7 +549,9 @@ Tracks dropped decisions and provides metrics for observability.
 Usage:
   $0              One-shot capacity check (for cron)
   $0 --watch      Continuous monitoring (for systemd)
-  $0 --status     Show current capacity status and stats
+  $0 --status     Show current capacity status, stats, and rule placement
+  $0 --placement  Check that the crowdsec DROP rules sit above UniFi's
+                  firewall/zone chains (read-only; exit 1 on warning)
   $0 --check      Check capacity and log warnings
   $0 --record-dropped [N]  Record N dropped decisions (for external scripts)
 
