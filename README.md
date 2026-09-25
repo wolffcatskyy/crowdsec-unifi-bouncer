@@ -51,6 +51,7 @@ Drop-in install of the official [CrowdSec firewall bouncer](https://github.com/c
 - [Prometheus Metrics](docs/metrics.md)
 - [Troubleshooting](docs/troubleshooting.md)
 - [Uninstalling](#uninstalling)
+- [Rule Placement vs Zone Firewall](docs/zone-placement.md)
 - [Migration from v1.x](#migration-from-python-bouncer)
 - [Related Projects](#complete-unifi--crowdsec-suite)
 - [Contributing](#contributing)
