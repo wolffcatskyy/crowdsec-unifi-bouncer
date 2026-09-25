@@ -24,6 +24,7 @@ export PATH="/usr/sbin:/usr/bin:/sbin:/bin:$PATH"
 METRICS_PORT="${METRICS_PORT:-9101}"
 BOUNCER_DIR="${BOUNCER_DIR:-/data/crowdsec-bouncer}"
 IPSET_NAME="${IPSET_NAME:-crowdsec-blacklists}"
+IPSET_V6_NAME="${IPSET_V6_NAME:-crowdsec6-blacklists}"
 STATE_FILE="${STATE_FILE:-$BOUNCER_DIR/metrics-state}"
 MEMORY_LOG="$BOUNCER_DIR/log/memory.log"
 
@@ -152,6 +153,27 @@ collect_metrics() {
     if iptables -C FORWARD -m set --match-set "$IPSET_NAME" src -j DROP 2>/dev/null; then
         forward_rule_present=1
     fi
+
+    # --- IPv6 ipset + rules (only meaningful when the v6 set exists) ---
+    local ipset6_entries=0
+    local ipset6_maxelem=0
+    local input6_rule_present=0
+    local forward6_rule_present=0
+
+    if ipset list "$IPSET_V6_NAME" -t 2>/dev/null | grep -q "^Name:"; then
+        ipset6_entries=$(ipset list "$IPSET_V6_NAME" -t 2>/dev/null | awk '/^Number of entries:/{print $NF}')
+        ipset6_maxelem=$(ipset list "$IPSET_V6_NAME" -t 2>/dev/null | awk '/^Maxelem:/{print $NF}')
+        if command -v ip6tables >/dev/null 2>&1; then
+            if ip6tables -C INPUT -m set --match-set "$IPSET_V6_NAME" src -j DROP 2>/dev/null; then
+                input6_rule_present=1
+            fi
+            if ip6tables -C FORWARD -m set --match-set "$IPSET_V6_NAME" src -j DROP 2>/dev/null; then
+                forward6_rule_present=1
+            fi
+        fi
+    fi
+    ipset6_entries="${ipset6_entries:-0}"
+    ipset6_maxelem="${ipset6_maxelem:-0}"
 
     # --- Last Sync from memory.log ---
     local last_sync_timestamp=0
@@ -282,6 +304,26 @@ crowdsec_unifi_bouncer_capacity_percent $capacity_percent
 # HELP crowdsec_unifi_bouncer_degraded Whether the bouncer is at capacity and dropping decisions (1=degraded, 0=normal)
 # TYPE crowdsec_unifi_bouncer_degraded gauge
 crowdsec_unifi_bouncer_degraded $degraded
+
+# HELP crowdsec_unifi_bouncer_blocked_ips6_total Current number of IPs in the IPv6 ipset (0 when IPv6 is disabled)
+# TYPE crowdsec_unifi_bouncer_blocked_ips6_total gauge
+crowdsec_unifi_bouncer_blocked_ips6_total $ipset6_entries
+
+# HELP crowdsec_unifi_bouncer_ipset6_size Configured maximum size of the IPv6 ipset (maxelem)
+# TYPE crowdsec_unifi_bouncer_ipset6_size gauge
+crowdsec_unifi_bouncer_ipset6_size $ipset6_maxelem
+
+# HELP crowdsec_unifi_bouncer_ipset6_fill_ratio Ratio of current IPv6 entries to max capacity (0.0-1.0)
+# TYPE crowdsec_unifi_bouncer_ipset6_fill_ratio gauge
+crowdsec_unifi_bouncer_ipset6_fill_ratio $(awk "BEGIN {if ($ipset6_maxelem > 0) printf \"%.4f\", $ipset6_entries/$ipset6_maxelem; else print 0}")
+
+# HELP crowdsec_unifi_bouncer_input6_rule_present Whether the IPv6 INPUT chain DROP rule is present (1=yes, 0=no)
+# TYPE crowdsec_unifi_bouncer_input6_rule_present gauge
+crowdsec_unifi_bouncer_input6_rule_present $input6_rule_present
+
+# HELP crowdsec_unifi_bouncer_forward6_rule_present Whether the IPv6 FORWARD chain DROP rule is present (1=yes, 0=no)
+# TYPE crowdsec_unifi_bouncer_forward6_rule_present gauge
+crowdsec_unifi_bouncer_forward6_rule_present $forward6_rule_present
 
 # HELP crowdsec_unifi_bouncer_rule_placement_ok Whether the DROP rules sit at the top of INPUT/FORWARD, ahead of UniFi's chains (1=ok, 0=drift; checked every 5 min by ensure-rules.sh)
 # TYPE crowdsec_unifi_bouncer_rule_placement_ok gauge
