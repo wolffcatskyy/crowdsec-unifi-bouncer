@@ -104,19 +104,23 @@ ensure_drop_at_top iptables FORWARD "$IPSET_NAME"
 # Enabled when the bouncer config has `disable_ipv6: false` (the default in the
 # v2.6+ config template). The v6 set is independent: its own name
 # (blacklists_ipv6 in the bouncer config), its own maxelem, its own capacity.
-# MAXELEM_V6_OVERRIDE sets a different v6 ceiling; without it the v6 set uses
-# the same limit as the v4 set for this device.
+# MAXELEM_V6_OVERRIDE sets a different v6 ceiling. The default is 2,000
+# entries, independent of the larger v4 limit; verify combined memory on hardware.
 CONFIG_FILE="$BOUNCER_DIR/crowdsec-firewall-bouncer.yaml"
 IPV6_ENABLED=false
 if [ -f "$CONFIG_FILE" ] && grep -Eq '^[[:space:]]*disable_ipv6:[[:space:]]*false' "$CONFIG_FILE"; then
     IPV6_ENABLED=true
 fi
 
+if [ "$IPV6_ENABLED" != "true" ]; then
+    echo "[WARN] IPv6 enforcement is off (disable_ipv6 is true or not set in $CONFIG_FILE). Existing configs are not rewritten on upgrade; set disable_ipv6: false to enable IPv6 after checking your device."
+fi
+
 if [ "$IPV6_ENABLED" = "true" ]; then
     if ! command -v ip6tables >/dev/null 2>&1; then
         echo "[WARN] disable_ipv6 is false but ip6tables was not found - skipping IPv6 setup"
     else
-        MAXELEM_V6="${MAXELEM_V6_OVERRIDE:-$MAXELEM}"
+        MAXELEM_V6="${MAXELEM_V6_OVERRIDE:-2000}"
         if ! ipset list "$IPSET_V6_NAME" >/dev/null 2>&1; then
             ipset create "$IPSET_V6_NAME" hash:net family inet6 maxelem "$MAXELEM_V6" timeout 2147483
             echo "Created ipset: $IPSET_V6_NAME (family inet6, maxelem=$MAXELEM_V6)"
