@@ -152,6 +152,7 @@ cp config.yaml.example config.yaml
 | `upstream_lapi_url` | string | *required* | URL of your CrowdSec LAPI (e.g., `http://crowdsec:8080`). |
 | `upstream_lapi_key` | string | *required* | Bouncer API key. Use the same key your bouncer was registered with. |
 | `max_decisions` | int | `15000` | Maximum decisions returned to the bouncer. Set below your ipset `maxelem` -- leave ~2,000 headroom for manual entries and churn. Example: device maxelem=20,000, set max_decisions=18,000. |
+| `max_decisions_v6` | int | `0` (= 1,000) | Maximum IPv6 decisions returned to the bouncer (v2.6+). The device keeps a separate inet6 ipset with its own maxelem, so the v6 cap is independent - a v6 flood can't evict v4 decisions. Set below your v6 maxelem (`MAXELEM_V6_OVERRIDE`). |
 | `cache_ttl` | duration | `60s` | How long to cache upstream LAPI responses. Reduces load on LAPI while keeping data fresh enough. |
 | `upstream_timeout` | duration | `120s` | Timeout for upstream LAPI requests. Large decision sets (120K+) can take time, especially on `startup=true` stream queries. |
 | `log_level` | string | `info` | Log verbosity: `debug`, `info`, `warn`, `error`. JSON-structured output to stdout. |
@@ -355,6 +356,32 @@ The sidecar image is published to **GitHub Container Registry (GHCR)** on each r
 
 Multi-arch images are provided for `linux/amd64` and `linux/arm64`.
 
+| Tag | Base | Shell |
+|-----|------|-------|
+| `latest`, `vX.Y.Z` | `gcr.io/distroless/static-debian12:nonroot` | No |
+| `debug`, `vX.Y.Z-debug` | `gcr.io/distroless/static-debian12:debug-nonroot` | Yes (busybox, `/busybox/sh`) |
+
+Use the default tag in production. Switch to the `-debug` tag only when you need a shell
+inside the container, e.g. `docker exec -it crowdsec-sidecar sh`.
+
+### Verifying the image
+
+Release images are signed with [Cosign](https://docs.sigstore.dev/) keyless signing (GitHub OIDC)
+and carry a CycloneDX SBOM as a signed attestation. The SBOM is also attached to the GitHub
+release when one exists for the tag.
+
+```bash
+cosign verify ghcr.io/wolffcatskyy/crowdsec-sidecar:vX.Y.Z \
+  --certificate-identity-regexp '^https://github.com/wolffcatskyy/crowdsec-unifi-bouncer/.github/workflows/docker-publish.yml@' \
+  --certificate-oidc-issuer https://token.actions.githubusercontent.com
+
+# Download and check the SBOM attestation
+cosign verify-attestation --type cyclonedx ghcr.io/wolffcatskyy/crowdsec-sidecar:vX.Y.Z \
+  --certificate-identity-regexp '^https://github.com/wolffcatskyy/crowdsec-unifi-bouncer/.github/workflows/docker-publish.yml@' \
+  --certificate-oidc-issuer https://token.actions.githubusercontent.com \
+  | jq -r '.payload | @base64d | fromjson | .predicate' > sbom.cdx.json
+```
+
 Add the sidecar service to your existing CrowdSec compose file. The bouncer connects to the sidecar instead of LAPI directly.
 
 ### docker-compose.yaml
@@ -376,7 +403,7 @@ services:
     depends_on:
       - crowdsec
     healthcheck:
-      test: ["CMD", "wget", "-q", "--spider", "http://localhost:8084/health"]
+      test: ["CMD", "/usr/local/bin/crowdsec-sidecar", "-healthcheck", "-config", "/etc/crowdsec-sidecar/config.yaml"]
       interval: 30s
       timeout: 5s
       retries: 3
@@ -421,17 +448,27 @@ If you prefer to build the image yourself instead of pulling from a registry:
 git clone https://github.com/wolffcatskyy/crowdsec-unifi-bouncer.git
 cd crowdsec-unifi-bouncer/sidecar
 docker build -t crowdsec-sidecar:latest .
+# or, with a shell for troubleshooting:
+docker build --target debug -t crowdsec-sidecar:debug .
 ```
 
 ### Dockerfile
 
-The included multi-stage Dockerfile builds a minimal Alpine-based image:
+The included multi-stage Dockerfile builds a minimal distroless image:
 
-- Build stage: `golang:1.21-alpine`
-- Runtime stage: `alpine:3.19` with `ca-certificates` and `tzdata`
-- Runs as non-root user (`sidecar`, UID 1000)
-- Built-in healthcheck via `wget`
+- Build stage: `golang:1.25-alpine`, cross-compiled natively for each target arch (`-trimpath`, stripped)
+- Runtime stage (default): `gcr.io/distroless/static-debian12:nonroot` - no shell, no package manager;
+  includes CA certificates and tzdata (`TZ=` still works)
+- `debug` target: same binary on `distroless/static-debian12:debug-nonroot` (busybox shell)
+- Base images pinned by digest
+- Runs as non-root (UID/GID `1000:1000`, same as previous releases)
+- Built-in healthcheck via `crowdsec-sidecar -healthcheck` (probes `listen_addr` + `health.path` from the config)
 - Exposes port 8084
+
+> **Upgrading from v2.5.x or earlier:** the image still runs as UID 1000, so mounted
+> `config.yaml` permissions are unaffected. The one breaking change: the image no longer has a
+> shell or `wget`, so any compose healthcheck that calls `wget` fails on the new image. Switch it to
+> `["CMD", "/usr/local/bin/crowdsec-sidecar", "-healthcheck", "-config", "/etc/crowdsec-sidecar/config.yaml"]`.
 
 ---
 
@@ -514,6 +551,7 @@ All metrics are exposed at the `/metrics` endpoint in Prometheus text format.
 | `crowdsec_sidecar_cached_decisions` | gauge | Current number of decisions held in the response cache. |
 | `crowdsec_sidecar_upstream_latency_seconds` | gauge | Latency of the most recent upstream LAPI request, in seconds. |
 | `crowdsec_sidecar_max_decisions` | gauge | Configured `max_decisions` limit (static, from config). |
+| `crowdsec_sidecar_max_decisions_v6` | gauge | Configured IPv6 decisions limit (effective value, 1,000 by default). |
 | `crowdsec_sidecar_decisions_total` | gauge | Total number of decisions received from upstream LAPI (before filtering). |
 | `crowdsec_sidecar_decisions_dropped` | gauge | Number of decisions dropped due to the `max_decisions` limit. |
 | `crowdsec_sidecar_uptime_seconds` | gauge | Time in seconds since the sidecar process started. |

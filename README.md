@@ -9,10 +9,10 @@
 [![Docker Publish](https://github.com/wolffcatskyy/crowdsec-unifi-bouncer/actions/workflows/docker-publish.yml/badge.svg)](https://github.com/wolffcatskyy/crowdsec-unifi-bouncer/actions/workflows/docker-publish.yml)
 [![Mentioned in Awesome UniFi](https://awesome.re/mentioned-badge-flat.svg)](https://github.com/wolffcatskyy/awesome-unifi)
 
-Drop-in install of the official [CrowdSec firewall bouncer](https://github.com/crowdsecurity/cs-firewall-bouncer) on UniFi OS devices — with persistence through reboots and controller reprovisioning, and automatic recovery after firmware updates (with on-boot-script-2.x). Includes an intelligent sidecar proxy that scores and prioritizes threats when you have more decisions than your device can hold.
+Drop-in install of the official [CrowdSec firewall bouncer](https://github.com/crowdsecurity/cs-firewall-bouncer) on UniFi OS devices — with persistence through reboots and controller reprovisioning, and automatic recovery after firmware updates (via on-boot-script-2.x, which the installer sets up if it's missing). Includes an intelligent sidecar proxy that scores and prioritizes threats when you have more decisions than your device can hold.
 
 > [!TIP]
-> **v2.5.4 Released** — the bouncer now comes back on its own after a UniFi OS firmware update (beta: not yet verified on real hardware, [reports welcome](https://github.com/wolffcatskyy/crowdsec-unifi-bouncer/discussions/46)). Updates reset `/etc` and root's crontab, which used to leave the bouncer silently stopped; the installer now enables the service and, with [on-boot-script-2.x](https://github.com/unifi-utilities/unifios-utilities/tree/main/on-boot-script-2.x), hooks `boot-restore.sh` to put everything back on every boot. Thanks @RichBrew ([#46](https://github.com/wolffcatskyy/crowdsec-unifi-bouncer/discussions/46)). v2.5.3 fixed the capacity monitor reading 0% on ipset 7.x (thanks @ahmaddxb, #63). [Release notes](https://github.com/wolffcatskyy/crowdsec-unifi-bouncer/releases/tag/v2.5.4)
+> **v2.5.4 Released** — the bouncer now comes back on its own after a UniFi OS firmware update (beta: not yet verified on real hardware, [reports welcome](https://github.com/wolffcatskyy/crowdsec-unifi-bouncer/discussions/46)). Updates reset `/etc` and root's crontab, which used to leave the bouncer silently stopped; the installer now enables the service and, with [on-boot-script-2.x](https://github.com/unifi-utilities/unifi-common), hooks `boot-restore.sh` to put everything back on every boot. Thanks @RichBrew ([#46](https://github.com/wolffcatskyy/crowdsec-unifi-bouncer/discussions/46)). v2.5.3 fixed the capacity monitor reading 0% on ipset 7.x (thanks @ahmaddxb, #63). [Release notes](https://github.com/wolffcatskyy/crowdsec-unifi-bouncer/releases/tag/v2.5.4)
 
 > [!CAUTION]
 > **Beware of impostor repositories.** The official CrowdSec UniFi Bouncer is hosted at [`wolffcatskyy/crowdsec-unifi-bouncer`](https://github.com/wolffcatskyy/crowdsec-unifi-bouncer). We do **not** distribute ZIP file downloads or executable installers. If you see a repo offering "one-click downloads" of this project, it may contain malware. Always install via the official instructions below.
@@ -36,6 +36,7 @@ Drop-in install of the official [CrowdSec firewall bouncer](https://github.com/c
 - **AbuseIPDB reporting** (v2.4.0) — automatically reports locally-banned IPs to AbuseIPDB, contributing to community threat intelligence
 - **LOG rules for detection** (v2.5.0) — iptables LOG rules make dropped packets visible to CrowdSec, enabling port scan detection and AbuseIPDB reporting
 - **Lightweight** — 15 MB RAM for the bouncer, 8 MB for the sidecar
+- **IPv4 + IPv6** (v2.6, beta) — separate inet6 ipset and `ip6tables` rules mirror the v4 path, with independent capacity limits. Existing configs retain `disable_ipv6: true` on upgrade and must be changed explicitly to enable IPv6; `setup.sh` warns while it is off. On v2.5.x and earlier the bouncer is IPv4 only: IPv6 decisions are not enforced
 
 ## Table of Contents
 
@@ -50,6 +51,8 @@ Drop-in install of the official [CrowdSec firewall bouncer](https://github.com/c
 - [LOG Rules for Detection](#log-rules-for-detection)
 - [Prometheus Metrics](docs/metrics.md)
 - [Troubleshooting](docs/troubleshooting.md)
+- [Uninstalling](#uninstalling)
+- [Rule Placement vs Zone Firewall](docs/zone-placement.md)
 - [Migration from v1.x](#migration-from-python-bouncer)
 - [Related Projects](#complete-unifi--crowdsec-suite)
 - [Contributing](#contributing)
@@ -60,7 +63,7 @@ Two problems, one project.
 
 **Problem 1: Persistence.** The official bouncer binary works perfectly on UniFi devices, but UniFi OS doesn't make it easy to keep it running. Firmware updates wipe your iptables rules. Controller reprovisioning silently removes custom firewall rules. Systemd service links disappear. You install it, it works, then one day it's quietly stopped blocking anything.
 
-**Problem 2: Capacity.** CrowdSec's community blocklist (CAPI) can push 100,000+ decisions to your bouncer. UniFi devices have hardware-limited ipset capacity (15K-30K entries depending on model). When the ipset fills up, new IPs fail silently — "Hash is full" errors buried in the log, zero alerting, and your most dangerous new threats get dropped while stale entries from last month sit in the set.
+**Problem 2: Capacity.** CrowdSec's community blocklist (CAPI) can push 100,000+ decisions to your bouncer. UniFi devices have hardware-limited ipset capacity — safe limits range from ~15K entries on consumer hardware to 120K measured on a UDM SE (see the [measured capacity table](docs/device-compatibility.md#measured-capacity-one-canonical-table)). When the ipset fills up, new IPs fail silently — "Hash is full" errors buried in the log, zero alerting, and your most dangerous new threats get dropped while stale entries from last month sit in the set.
 
 **The solution:** An installer, persistence scripts, and an optional sidecar proxy that handles all of this. Install once, forget about it.
 
@@ -139,10 +142,13 @@ See [docs/architecture.md](docs/architecture.md) for the full diagram and persis
 
 UniFi OS firmware updates keep `/data/` but reset `/etc/` and root's crontab. That removes the bouncer's systemd service, its "enabled" link, and its cron jobs, so without help the bouncer stays stopped after an update, with no warning.
 
-`boot-restore.sh` puts all of that back and starts the bouncer. To run it automatically on every boot:
+`boot-restore.sh` puts all of that back and starts the bouncer. It runs automatically on every boot through unifi-utilities' [on-boot-script-2.x](https://github.com/unifi-utilities/unifi-common) (the `udm-boot` service, now maintained in unifi-common), and the installer handles that dependency:
 
-1. Install [on-boot-script-2.x](https://github.com/unifi-utilities/unifios-utilities/tree/main/on-boot-script-2.x) from unifios-utilities.
-2. Re-run the installer. When `/data/on_boot.d` exists, it adds `/data/on_boot.d/99-crowdsec-bouncer.sh`.
+- **Already installed?** The installer leaves it alone and just adds `/data/on_boot.d/99-crowdsec-bouncer.sh`.
+- **Missing?** The installer downloads `udm-boot.service` from a pinned unifi-common commit, checks its SHA-256, installs and enables it, then adds the hook. If the checksum doesn't match, the install stops before changing anything and tells you why. The pinned commit and checksum sit in a clearly marked block at the top of `install.sh`. No copy of on-boot-script is kept in this repo.
+- **Don't want it installed?** Run the installer with `ONBOOT_AUTO_INSTALL=0` (for example `curl -sSL .../bootstrap.sh | ONBOOT_AUTO_INSTALL=0 bash`). You'll get a warning and the manual command below instead.
+
+If a firmware update ever removes on-boot-script itself, re-run the installer and it will put the pinned version back.
 
 Without on-boot-script, run this after each firmware update:
 
@@ -208,6 +214,14 @@ Common issues: bouncer starts but no IPs blocked, iptables rules disappearing, s
 
 See [docs/troubleshooting.md](docs/troubleshooting.md) for diagnostics and solutions.
 
+## Uninstalling
+
+```bash
+/data/crowdsec-bouncer/uninstall.sh
+```
+
+Removes the services, cron jobs, firmware-update hook, iptables rules, ipset, and `/data/crowdsec-bouncer`. Use `--keep-config` to keep your config and logs, and `--dry-run` to preview. Remember to also delete the bouncer from your LAPI (`cscli bouncers delete <name>`).
+
 ## Migration from Python Bouncer
 
 If upgrading from v1.x:
@@ -271,5 +285,6 @@ See the [full changelog](https://github.com/wolffcatskyy/crowdsec-unifi-bouncer/
 
 - [CrowdSec](https://crowdsec.net) -- the open-source security engine
 - [crowdsecurity/cs-firewall-bouncer](https://github.com/crowdsecurity/cs-firewall-bouncer) -- the official Go binary
+- [unifi-utilities/unifi-common](https://github.com/unifi-utilities/unifi-common) -- on-boot-script-2.x (`udm-boot`), used for the firmware-update hook
 - [unifi-utilities/unifios-utilities](https://github.com/unifi-utilities/unifios-utilities) -- community patterns for persisting custom services on UniFi OS
 - [Trent Bauer](https://www.trentbauer.com) -- community guide and writeup

@@ -1,6 +1,7 @@
 #!/bin/bash
 # CrowdSec Firewall Bouncer - iptables LOG Rule Deployment
 # Inserts LOG rules before DROP rules in UniFi WAN chains for CrowdSec visibility
+# Covers IPv4 (iptables) and, when ip6tables is available, IPv6.
 #
 # Without LOG rules, the bouncer blocks traffic but CrowdSec cannot detect
 # port scans or other malicious patterns in dropped packets. This script
@@ -23,6 +24,15 @@ COMMENT_MARKER="CROWDSEC_LOG"
 RATE_LIMIT="10/min"
 RATE_BURST="20"
 LOG_LEVEL="4"
+
+# Firewall command for the current pass: "iptables" (IPv4) or "ip6tables"
+# (IPv6). Set by run_family before each pass; the helpers below all use it.
+IPT="iptables"
+
+# Whether ip6tables is usable on this device
+has_ip6tables() {
+    command -v ip6tables >/dev/null 2>&1
+}
 
 # Chains to process — all WAN-facing USER chains on UniFi OS
 CHAINS=(
@@ -82,9 +92,9 @@ chain_to_short() {
     echo "$short"
 }
 
-# Check if a chain exists in iptables
+# Check if a chain exists in the current family's table
 chain_exists() {
-    iptables -L "$1" -n >/dev/null 2>&1
+    "$IPT" -L "$1" -n >/dev/null 2>&1
 }
 
 # Remove all existing CROWDSEC_LOG rules from all chains
@@ -100,7 +110,7 @@ cleanup_rules() {
         # We always remove the lowest-numbered match because indices shift after deletion.
         while true; do
             local rule_num
-            rule_num=$(iptables -L "$chain" --line-numbers -n 2>/dev/null \
+            rule_num=$("$IPT" -L "$chain" --line-numbers -n 2>/dev/null \
                 | grep "$COMMENT_MARKER" \
                 | head -1 \
                 | awk '{print $1}')
@@ -109,7 +119,7 @@ cleanup_rules() {
                 break
             fi
 
-            iptables -D "$chain" "$rule_num" 2>/dev/null
+            "$IPT" -D "$chain" "$rule_num" 2>/dev/null
             total_removed=$((total_removed + 1))
         done
     done
@@ -130,7 +140,7 @@ show_status() {
         fi
 
         local count
-        count=$(iptables -S "$chain" 2>/dev/null | grep -c "$COMMENT_MARKER" || true)
+        count=$("$IPT" -S "$chain" 2>/dev/null | grep -c "$COMMENT_MARKER" || true)
         printf "%-25s %d\n" "$chain" "$count"
         total=$((total + count))
     done
@@ -192,7 +202,7 @@ deploy_chain() {
         drop_indices+=("$rule_index")
         drop_invalid+=("$is_invalid")
         drop_matches+=("$match_portion")
-    done < <(iptables -S "$chain" 2>/dev/null)
+    done < <("$IPT" -S "$chain" 2>/dev/null)
 
     if [ ${#drop_indices[@]} -eq 0 ]; then
         log_info "  No DROP rules in $chain"
@@ -215,8 +225,8 @@ deploy_chain() {
 
         local prefix="[UNIFI-${short}-D-${suffix}]"
 
-        # Build iptables insert command
-        local cmd="iptables -I $chain $idx"
+        # Build insert command for the current family
+        local cmd="$IPT -I $chain $idx"
         if [ -n "$match" ]; then
             cmd="$cmd $match"
         fi
@@ -245,7 +255,7 @@ verify_rules() {
         fi
 
         local count
-        count=$(iptables -S "$chain" 2>/dev/null | grep -c "$COMMENT_MARKER" || true)
+        count=$("$IPT" -S "$chain" 2>/dev/null | grep -c "$COMMENT_MARKER" || true)
         if [ "$count" -gt 0 ]; then
             log_info "  Verified: $count LOG rule(s) in $(chain_to_short "$chain")"
         fi
@@ -257,66 +267,90 @@ verify_rules() {
 
 # --- Main ---
 
+# Families to process: IPv4 always; IPv6 whenever ip6tables exists on the
+# device. UniFi's WAN chains exist in both tables, and its DROP rules deserve
+# LOG coverage in both - a v6 port scan is invisible to CrowdSec otherwise.
+FAMILIES="iptables"
+if has_ip6tables; then
+    FAMILIES="$FAMILIES ip6tables"
+fi
+
 # Status mode
 if [ "$STATUS_ONLY" = true ]; then
-    show_status
+    for IPT in $FAMILIES; do
+        echo "[$IPT]"
+        show_status
+        echo ""
+    done
     exit 0
 fi
 
 # Remove mode
 if [ "$REMOVE_ONLY" = true ]; then
-    log_info "Removing all $COMMENT_MARKER rules..."
-    removed=$(cleanup_rules)
-    echo "Removed $removed LOG rule(s)"
+    for IPT in $FAMILIES; do
+        log_info "[$IPT] Removing all $COMMENT_MARKER rules..."
+        removed=$(cleanup_rules)
+        echo "[$IPT] Removed $removed LOG rule(s)"
+    done
     exit 0
 fi
 
-# Deploy mode (default)
-log_info "=== CrowdSec LOG Rule Deployment ==="
+# Deploy mode (default), per family
+grand_removed=0
+grand_deployed=0
+grand_verified=0
 
-# Phase 1: Cleanup existing rules (idempotent)
-log_info "Phase 1: Cleanup existing $COMMENT_MARKER rules"
-removed=$(cleanup_rules)
-if [ "$removed" -gt 0 ]; then
-    log_info "Removed $removed existing LOG rule(s)"
-else
-    log_info "No existing LOG rules to remove"
-fi
+for IPT in $FAMILIES; do
+    log_info "=== CrowdSec LOG Rule Deployment [$IPT] ==="
 
-# Phase 2: Deploy LOG rules before every DROP rule
-log_info "Phase 2: Deploy LOG rules"
-total_deployed=0
+    # Phase 1: Cleanup existing rules (idempotent)
+    log_info "Phase 1 [$IPT]: Cleanup existing $COMMENT_MARKER rules"
+    removed=$(cleanup_rules)
+    if [ "$removed" -gt 0 ]; then
+        log_info "Removed $removed existing LOG rule(s)"
+    else
+        log_info "No existing LOG rules to remove"
+    fi
+    grand_removed=$((grand_removed + removed))
 
-for chain in "${CHAINS[@]}"; do
-    result=$(deploy_chain "$chain")
-    if [ -n "$result" ]; then
-        total_deployed=$((total_deployed + result))
+    # Phase 2: Deploy LOG rules before every DROP rule
+    log_info "Phase 2 [$IPT]: Deploy LOG rules"
+    total_deployed=0
+
+    for chain in "${CHAINS[@]}"; do
+        result=$(deploy_chain "$chain")
+        if [ -n "$result" ]; then
+            total_deployed=$((total_deployed + result))
+        fi
+    done
+
+    # Phase 3: Verify
+    log_info "Phase 3 [$IPT]: Verification"
+    verified=$(verify_rules)
+
+    grand_deployed=$((grand_deployed + total_deployed))
+    grand_verified=$((grand_verified + verified))
+
+    if [ "$total_deployed" -ne "$verified" ]; then
+        log_error "[$IPT] MISMATCH: deployed $total_deployed but verified $verified"
+        exit 1
     fi
 done
-
-# Phase 3: Verify
-log_info "Phase 3: Verification"
-verified=$(verify_rules)
 
 # Summary
 if [ "$QUIET" = false ]; then
     echo ""
     echo "=== Summary ==="
-    echo "Removed:  $removed"
-    echo "Deployed: $total_deployed"
-    echo "Verified: $verified"
+    echo "Removed:  $grand_removed"
+    echo "Deployed: $grand_deployed"
+    echo "Verified: $grand_verified"
 fi
 
-if [ "$total_deployed" -ne "$verified" ]; then
-    log_error "MISMATCH: deployed $total_deployed but verified $verified"
-    exit 1
-fi
-
-if [ "$total_deployed" -eq 0 ]; then
+if [ "$grand_deployed" -eq 0 ]; then
     log_info "No DROP rules found in any chain (normal if bouncer hasn't started yet)"
 else
-    log_info "Deployed $total_deployed LOG rule(s)"
-    logger -t crowdsec-bouncer "Deployed $total_deployed iptables LOG rules for CrowdSec visibility"
+    log_info "Deployed $grand_deployed LOG rule(s)"
+    logger -t crowdsec-bouncer "Deployed $grand_deployed iptables LOG rules for CrowdSec visibility"
 fi
 
 exit 0

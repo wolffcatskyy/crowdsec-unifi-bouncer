@@ -14,6 +14,22 @@ crontab -l | grep ensure-rules
 /data/crowdsec-bouncer/ensure-rules.sh
 ```
 
+## Banned IPs still get through
+
+Check that the crowdsec DROP rules sit above UniFi's firewall and zone chains:
+
+```bash
+/data/crowdsec-bouncer/ipset-capacity-monitor.sh --placement
+```
+
+Since v2.6, `ensure-rules.sh` also fixes drift itself: every 5 minutes it moves
+a displaced DROP rule back to position 1 of `INPUT`/`FORWARD` and records the
+check result as the `crowdsec_unifi_bouncer_rule_placement_ok` /
+`_rule_placement_warnings` gauges on the metrics endpoint (alert on
+`crowdsec_unifi_bouncer_rule_placement_ok == 0`).
+
+See [zone-placement.md](zone-placement.md) for what the warnings mean.
+
 ## Service gone after firmware update
 
 Firmware updates reset `/etc` and root's crontab. This re-links and enables the service, restores the cron jobs, and starts the bouncer:
@@ -22,7 +38,9 @@ Firmware updates reset `/etc` and root's crontab. This re-links and enables the 
 /data/crowdsec-bouncer/boot-restore.sh --boot
 ```
 
-To make it automatic, install [on-boot-script-2.x](https://github.com/unifi-utilities/unifios-utilities/tree/main/on-boot-script-2.x) and re-run `install.sh` (it adds `/data/on_boot.d/99-crowdsec-bouncer.sh`).
+To make it automatic, re-run `install.sh`. If [on-boot-script-2.x](https://github.com/unifi-utilities/unifi-common) is missing (a firmware update can remove it too), the installer installs a pinned, checksum-verified copy and adds `/data/on_boot.d/99-crowdsec-bouncer.sh`.
+
+If the installer stops with `CHECKSUM MISMATCH for on-boot-script-2.x`, the downloaded `udm-boot.service` didn't match the pinned SHA-256 and nothing was changed. Please [open an issue](https://github.com/wolffcatskyy/crowdsec-unifi-bouncer/issues). To install without it, run with `ONBOOT_AUTO_INSTALL=0`.
 
 ## Device becomes unresponsive
 

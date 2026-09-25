@@ -21,7 +21,11 @@ api_key: YOUR_BOUNCER_API_KEY
 # api_key: YOUR_BOUNCER_API_KEY
 
 insecure_skip_verify: false
-disable_ipv6: true
+# IPv6 enforcement (v2.6+): with disable_ipv6: false the bouncer also fills the
+# crowdsec6-blacklists inet6 ipset, and setup.sh mirrors the DROP rules into
+# ip6tables at position 1. On v2.5.x and earlier this was hard-coded true -
+# IPv6 decisions were accepted from LAPI but never enforced on the device.
+disable_ipv6: false
 deny_action: DROP
 deny_log: false
 supported_decisions_types:

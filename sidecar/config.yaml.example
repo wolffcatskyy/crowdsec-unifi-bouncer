@@ -12,10 +12,17 @@ upstream_lapi_url: "http://127.0.0.1:8080"
 # Bouncer API key (same key you'd use with the bouncer)
 upstream_lapi_key: "YOUR_BOUNCER_KEY"
 
-# Maximum number of decisions to return to bouncer
+# Maximum number of IPv4 decisions to return to bouncer
 # Set below your ipset maxelem to leave headroom for manual entries
 # Example: device maxelem=20000, set max_decisions=18000
 max_decisions: 18000
+
+# Maximum number of IPv6 decisions to return to bouncer (v2.6+)
+# The device keeps a separate inet6 ipset (crowdsec6-blacklists) with its own
+# maxelem, so the v6 cap is independent: a v6 flood can't evict v4 decisions.
+# Unset or 0 = 1000, below the default v6 maxelem of 2000. If you override
+# MAXELEM_V6_OVERRIDE, keep this cap below it to leave room for manual bans.
+# max_decisions_v6: 1000
 
 # Eviction mode for incremental stream capping (env: EVICTION_MODE)
 # Controls what happens when CAPI decisions exceed max_decisions between full syncs:

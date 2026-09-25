@@ -7,6 +7,30 @@ set -e
 
 BOUNCER_DIR="/data/crowdsec-bouncer"
 IPSET_NAME="crowdsec-blacklists"
+IPSET_V6_NAME="${IPSET_V6_NAME:-crowdsec6-blacklists}"
+
+# ensure_drop_at_top <iptables|ip6tables> <chain> <ipset>
+# The DROP rules must sit at position 1, ahead of UniFi's jumps (TOR, ALIEN,
+# IPS, UBIOS_*). If the rule exists lower down (UniFi reprovisioning inserted
+# jumps above it), delete and re-insert at position 1. See docs/zone-placement.md.
+ensure_drop_at_top() {
+    local cmd="$1" chain="$2" set_name="$3" first
+    if "$cmd" -C "$chain" -m set --match-set "$set_name" src -j DROP 2>/dev/null; then
+        first=$("$cmd" -S "$chain" 2>/dev/null | grep -m1 -- "^-A $chain ")
+        case "$first" in
+            "-A $chain -m set --match-set $set_name src -j DROP"*)
+                return 0
+                ;;
+        esac
+        "$cmd" -D "$chain" -m set --match-set "$set_name" src -j DROP 2>/dev/null || return 1
+        "$cmd" -I "$chain" 1 -m set --match-set "$set_name" src -j DROP || return 1
+        echo "Moved $chain DROP rule back to position 1"
+        return 0
+    fi
+    "$cmd" -I "$chain" 1 -m set --match-set "$set_name" src -j DROP || return 1
+    echo "Added $chain DROP rule at position 1"
+    return 0
+}
 
 # Source device detection for safe maxelem defaults
 SCRIPT_DIR="$(dirname "$0")"
@@ -72,15 +96,38 @@ if ! ipset list "$IPSET_NAME" >/dev/null 2>&1; then
     echo "Created ipset: $IPSET_NAME (maxelem=$MAXELEM)"
 fi
 
-# Add iptables rules if not present
-if ! iptables -C INPUT -m set --match-set "$IPSET_NAME" src -j DROP 2>/dev/null; then
-    iptables -I INPUT 1 -m set --match-set "$IPSET_NAME" src -j DROP
-    echo "Added INPUT DROP rule"
+# Add iptables rules at position 1 (or move them back if displaced)
+ensure_drop_at_top iptables INPUT "$IPSET_NAME"
+ensure_drop_at_top iptables FORWARD "$IPSET_NAME"
+
+# --- IPv6 -------------------------------------------------------------------
+# Enabled when the bouncer config has `disable_ipv6: false` (the default in the
+# v2.6+ config template). The v6 set is independent: its own name
+# (blacklists_ipv6 in the bouncer config), its own maxelem, its own capacity.
+# MAXELEM_V6_OVERRIDE sets a different v6 ceiling. The default is 2,000
+# entries, independent of the larger v4 limit; verify combined memory on hardware.
+CONFIG_FILE="$BOUNCER_DIR/crowdsec-firewall-bouncer.yaml"
+IPV6_ENABLED=false
+if [ -f "$CONFIG_FILE" ] && grep -Eq '^[[:space:]]*disable_ipv6:[[:space:]]*false' "$CONFIG_FILE"; then
+    IPV6_ENABLED=true
 fi
 
-if ! iptables -C FORWARD -m set --match-set "$IPSET_NAME" src -j DROP 2>/dev/null; then
-    iptables -I FORWARD 1 -m set --match-set "$IPSET_NAME" src -j DROP
-    echo "Added FORWARD DROP rule"
+if [ "$IPV6_ENABLED" != "true" ]; then
+    echo "[WARN] IPv6 enforcement is off (disable_ipv6 is true or not set in $CONFIG_FILE). Existing configs are not rewritten on upgrade; set disable_ipv6: false to enable IPv6 after checking your device."
+fi
+
+if [ "$IPV6_ENABLED" = "true" ]; then
+    if ! command -v ip6tables >/dev/null 2>&1; then
+        echo "[WARN] disable_ipv6 is false but ip6tables was not found - skipping IPv6 setup"
+    else
+        MAXELEM_V6="${MAXELEM_V6_OVERRIDE:-2000}"
+        if ! ipset list "$IPSET_V6_NAME" >/dev/null 2>&1; then
+            ipset create "$IPSET_V6_NAME" hash:net family inet6 maxelem "$MAXELEM_V6" timeout 2147483
+            echo "Created ipset: $IPSET_V6_NAME (family inet6, maxelem=$MAXELEM_V6)"
+        fi
+        ensure_drop_at_top ip6tables INPUT "$IPSET_V6_NAME"
+        ensure_drop_at_top ip6tables FORWARD "$IPSET_V6_NAME"
+    fi
 fi
 
 # Ensure systemd service is properly linked (recovery after firmware update)
