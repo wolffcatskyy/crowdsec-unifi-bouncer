@@ -13,14 +13,15 @@ import (
 
 // Config represents the complete sidecar configuration.
 type Config struct {
-	ListenAddr      string        `yaml:"listen_addr"`
-	UpstreamLAPIURL string        `yaml:"upstream_lapi_url"`
-	UpstreamLAPIKey string        `yaml:"upstream_lapi_key"`
-	MaxDecisions    int           `yaml:"max_decisions"`
-	EvictionMode    string        `yaml:"eviction_mode"` // "cap" (default) or "evict"
-	CacheTTL        time.Duration `yaml:"cache_ttl"`
-	UpstreamTimeout time.Duration `yaml:"upstream_timeout"`
-	LogLevel        string        `yaml:"log_level"`
+	ListenAddr      string              `yaml:"listen_addr"`
+	UpstreamLAPIURL string              `yaml:"upstream_lapi_url"`
+	UpstreamLAPIKey string              `yaml:"upstream_lapi_key"`
+	MaxDecisions    int                 `yaml:"max_decisions"`
+	MaxDecisionsV6  int                 `yaml:"max_decisions_v6"`
+	EvictionMode    string              `yaml:"eviction_mode"` // "cap" (default) or "evict"
+	CacheTTL        time.Duration       `yaml:"cache_ttl"`
+	UpstreamTimeout time.Duration       `yaml:"upstream_timeout"`
+	LogLevel        string              `yaml:"log_level"`
 	Scoring         ScoringConfig       `yaml:"scoring"`
 	Health          HealthConfig        `yaml:"health"`
 	Metrics         MetricsConfig       `yaml:"metrics"`
@@ -43,8 +44,8 @@ type CIDRBonus struct {
 
 // ScoringConfig contains all scoring-related settings.
 type ScoringConfig struct {
-	Scenarios          map[string]int `yaml:"scenarios"`
-	Origins            map[string]int `yaml:"origins"`
+	Scenarios          map[string]int   `yaml:"scenarios"`
+	Origins            map[string]int   `yaml:"origins"`
 	TTLScoring         TTLScoringConfig `yaml:"ttl_scoring"`
 	DecisionTypes      map[string]int   `yaml:"decision_types"`
 	ScenarioMultiplier float64          `yaml:"scenario_multiplier"`
@@ -188,6 +189,17 @@ func Load(path string) (*Config, error) {
 	return cfg, nil
 }
 
+// EffectiveMaxDecisionsV6 returns the IPv6 decision cap. The v4 and v6
+// ipsets have separate maxelem, so their caps are independent; when
+// max_decisions_v6 is unset (0) it defaults to 1,000, leaving headroom
+// beneath the default 2,000-entry IPv6 ipset. Explicit overrides remain independent.
+func (c *Config) EffectiveMaxDecisionsV6() int {
+	if c.MaxDecisionsV6 > 0 {
+		return c.MaxDecisionsV6
+	}
+	return 1000
+}
+
 // Validate checks that the configuration is valid.
 func (c *Config) Validate() error {
 	if c.ListenAddr == "" {
@@ -201,6 +213,9 @@ func (c *Config) Validate() error {
 	}
 	if c.MaxDecisions <= 0 {
 		return fmt.Errorf("max_decisions must be positive")
+	}
+	if c.MaxDecisionsV6 < 0 {
+		return fmt.Errorf("max_decisions_v6 cannot be negative")
 	}
 	if c.CacheTTL < 0 {
 		return fmt.Errorf("cache_ttl cannot be negative")

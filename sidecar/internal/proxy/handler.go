@@ -52,8 +52,10 @@ type Handler struct {
 	falseNegativesTotal    atomic.Int64
 	falseNegativeLastCheck atomic.Int64 // unix timestamp
 
-	// Stream-aware decision capping
-	streamTracker *tracker.StreamTracker
+	// Stream-aware decision capping (per address family: the device keeps
+	// separate v4/v6 ipsets with separate maxelem, so caps are independent)
+	streamTracker   *tracker.StreamTracker
+	streamTrackerV6 *tracker.StreamTracker
 
 	// AbuseIPDB reporter
 	abuseReporter *abuseipdb.Reporter
@@ -79,8 +81,9 @@ func New(cfg *config.Config, logger *slog.Logger) *Handler {
 				IdleConnTimeout:     90 * time.Second,
 			},
 		},
-		streamTracker: tracker.New(cfg.MaxDecisions, tracker.EvictionMode(cfg.EvictionMode), logger),
-		abuseReporter: abuseipdb.New(cfg.AbuseIPDB, logger),
+		streamTracker:   tracker.New(cfg.MaxDecisions, tracker.EvictionMode(cfg.EvictionMode), logger),
+		streamTrackerV6: tracker.New(cfg.EffectiveMaxDecisionsV6(), tracker.EvictionMode(cfg.EvictionMode), logger),
+		abuseReporter:   abuseipdb.New(cfg.AbuseIPDB, logger),
 	}
 }
 
@@ -165,6 +168,17 @@ func (h *Handler) handleDecisions(w http.ResponseWriter, r *http.Request) {
 	}
 }
 
+// scoreAndCapPerFamily scores and truncates IPv4 and IPv6 decisions
+// independently, each against its own cap (max_decisions / max_decisions_v6),
+// then recombines them. The device's v4 and v6 ipsets have separate maxelem,
+// so a flood in one family must not evict the other.
+func (h *Handler) scoreAndCapPerFamily(decisions []lapi.Decision) ([]lapi.Decision, scorer.Stats) {
+	v4, v6 := SplitByFamily(decisions)
+	keptV4, statsV4 := h.scorer.ScoreAndTruncateWithStats(v4, h.cfg.MaxDecisions)
+	keptV6, statsV6 := h.scorer.ScoreAndTruncateWithStats(v6, h.cfg.EffectiveMaxDecisionsV6())
+	return append(keptV4, keptV6...), mergeStats(statsV4, statsV6)
+}
+
 // handleDecisionsStream handles GET /v1/decisions/stream
 func (h *Handler) handleDecisionsStream(w http.ResponseWriter, r *http.Request) {
 	if r.Method != http.MethodGet {
@@ -192,10 +206,10 @@ func (h *Handler) handleDecisionsStream(w http.ResponseWriter, r *http.Request) 
 	h.metricsMu.Unlock()
 
 	if startup {
-		// Full sync: score, truncate to max_decisions, and initialize stream tracker
+		// Full sync: score, truncate to the per-family caps, initialize trackers
 		if len(stream.New) > 0 {
 			var stats scorer.Stats
-			stream.New, stats = h.scorer.ScoreAndTruncateWithStats(stream.New, h.cfg.MaxDecisions)
+			stream.New, stats = h.scoreAndCapPerFamily(stream.New)
 
 			// Store stats and dropped IPs from stream scoring
 			h.droppedIPsMu.Lock()
@@ -207,14 +221,21 @@ func (h *Handler) handleDecisionsStream(w http.ResponseWriter, r *http.Request) 
 			h.cacheMu.Unlock()
 		}
 
-		// Initialize tracker from the decisions that survived truncation
+		// Initialize trackers from the decisions that survived truncation
+		syncV4, syncV6 := SplitByFamily(stream.New)
 		h.streamTracker.Reset()
-		h.streamTracker.SetCapFromFullSync(stream.New)
+		h.streamTracker.SetCapFromFullSync(syncV4)
+		h.streamTrackerV6.Reset()
+		h.streamTrackerV6.SetCapFromFullSync(syncV6)
 	} else {
-		// Incremental: apply stream-aware capping
-		// The tracker enforces cumulative CAPI cap between full syncs
+		// Incremental: apply stream-aware capping per address family.
+		// The trackers enforce cumulative CAPI caps between full syncs
 		// while always passing through local decisions.
-		stream.New = h.streamTracker.FilterStreamDecisions(stream)
+		newV4, newV6 := SplitByFamily(stream.New)
+		delV4, delV6 := SplitByFamily(stream.Deleted)
+		keptV4 := h.streamTracker.FilterStreamDecisions(&lapi.DecisionStream{New: newV4, Deleted: delV4})
+		keptV6 := h.streamTrackerV6.FilterStreamDecisions(&lapi.DecisionStream{New: newV6, Deleted: delV6})
+		stream.New = append(keptV4, keptV6...)
 
 		// Report new incremental decisions to AbuseIPDB (non-startup only).
 		// Startup decisions are existing bans, not new detections.
@@ -227,14 +248,17 @@ func (h *Handler) handleDecisionsStream(w http.ResponseWriter, r *http.Request) 
 
 	// Log with tracker metrics for observability
 	trackerMetrics := h.streamTracker.GetMetrics()
+	trackerV6Metrics := h.streamTrackerV6.GetMetrics()
 	h.logger.Info("processed decision stream",
 		"new", len(stream.New),
 		"deleted", len(stream.Deleted),
 		"startup", startup,
 		"capi_count", trackerMetrics.CAPICount,
 		"capi_max", trackerMetrics.MaxDecisions,
-		"stream_passed", trackerMetrics.DecisionsPassed,
-		"stream_dropped", trackerMetrics.DecisionsDropped,
+		"capi_v6_count", trackerV6Metrics.CAPICount,
+		"capi_v6_max", trackerV6Metrics.MaxDecisions,
+		"stream_passed", trackerMetrics.DecisionsPassed+trackerV6Metrics.DecisionsPassed,
+		"stream_dropped", trackerMetrics.DecisionsDropped+trackerV6Metrics.DecisionsDropped,
 	)
 
 	w.Header().Set("Content-Type", "application/json")
@@ -321,6 +345,9 @@ func (h *Handler) handleMetrics(w http.ResponseWriter, r *http.Request) {
 	fmt.Fprintf(w, "# HELP crowdsec_sidecar_max_decisions Configured max decisions limit\n")
 	fmt.Fprintf(w, "# TYPE crowdsec_sidecar_max_decisions gauge\n")
 	fmt.Fprintf(w, "crowdsec_sidecar_max_decisions %d\n", h.cfg.MaxDecisions)
+	fmt.Fprintf(w, "# HELP crowdsec_sidecar_max_decisions_v6 Configured max IPv6 decisions limit\n")
+	fmt.Fprintf(w, "# TYPE crowdsec_sidecar_max_decisions_v6 gauge\n")
+	fmt.Fprintf(w, "crowdsec_sidecar_max_decisions_v6 %d\n", h.cfg.EffectiveMaxDecisionsV6())
 
 	fmt.Fprintf(w, "# HELP crowdsec_sidecar_decisions_total Total decisions from upstream\n")
 	fmt.Fprintf(w, "# TYPE crowdsec_sidecar_decisions_total gauge\n")
@@ -703,6 +730,6 @@ func (h *Handler) fetchAndScoreDecisions(ctx context.Context, query map[string][
 	h.lastUpstreamCall = time.Now()
 	h.metricsMu.Unlock()
 
-	result, stats := h.scorer.ScoreAndTruncateWithStats(decisions, h.cfg.MaxDecisions)
+	result, stats := h.scoreAndCapPerFamily(decisions)
 	return result, stats, nil
 }

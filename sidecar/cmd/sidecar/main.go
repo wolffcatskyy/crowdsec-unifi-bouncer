@@ -66,6 +66,7 @@ func main() {
 		"listen_addr", cfg.ListenAddr,
 		"upstream", cfg.UpstreamLAPIURL,
 		"max_decisions", cfg.MaxDecisions,
+		"max_decisions_v6", cfg.EffectiveMaxDecisionsV6(),
 		"eviction_mode", cfg.EvictionMode,
 		"cache_ttl", cfg.CacheTTL.String(),
 		"abuseipdb_enabled", cfg.AbuseIPDB.Enabled && cfg.AbuseIPDB.APIKey != "",

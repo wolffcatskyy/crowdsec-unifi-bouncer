@@ -7,6 +7,21 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+- `ipset-capacity-monitor.sh --placement` - read-only check that the crowdsec DROP rules sit above UniFi's firewall/zone chains in `INPUT` and `FORWARD`. Warns if a rule is missing, below a UniFi jump or an ACCEPT, or if native nftables tables appear. Also shown in `--status`.
+- `docs/zone-placement.md` - where the bouncer's rules land relative to UniFi's legacy and zone-based firewall chains on UniFi OS 4 vs 5, sourced and tagged by confidence, plus what would change under nftables.
+
+### Fixed
+- **`ensure-rules.sh` only checked that the DROP rules exist, not that they are first.** If UniFi reprovisioning inserted its own jumps above the bouncer's rules without flushing, the DROPs would sit below the zone chains - where an allow policy can accept a banned source - and nothing would notice. `ensure-rules.sh` (and `setup.sh`) now move a displaced rule back to position 1 of `INPUT`/`FORWARD`, not just re-add missing ones.
+
+### Added
+- **Placement drift monitoring on the 5-minute cron.** `ensure-rules.sh` now runs the `--placement` check every cycle and records the warning count, so drift is caught even when nobody runs the check by hand. New metrics-endpoint gauges: `crowdsec_unifi_bouncer_rule_placement_ok` (1=ok, 0=drift), `crowdsec_unifi_bouncer_rule_placement_warnings`, and `crowdsec_unifi_bouncer_rule_placement_last_check_timestamp`.
+- **IPv6 enforcement (beta, pending hardware verification).** With `disable_ipv6: false` (now the default in the config template) the bouncer fills a separate inet6 ipset (`crowdsec6-blacklists`, matching the upstream bouncer's `blacklists_ipv6`), and `setup.sh`/`ensure-rules.sh` mirror the DROP rules into `ip6tables` at position 1 of `INPUT`/`FORWARD`. `log-rules.sh` covers the v6 WAN chains, `--placement` checks the v6 chains when the v6 set exists, and the metrics endpoint gains `crowdsec_unifi_bouncer_blocked_ips6_total`, `crowdsec_unifi_bouncer_ipset6_size`, `crowdsec_unifi_bouncer_ipset6_fill_ratio`, and v6 rule-presence gauges. On v2.5.x and earlier the bouncer is IPv4 only: IPv6 decisions are not enforced.
+- **Separate IPv6 capacity limits.** The inet6 set has its own maxelem (`MAXELEM_V6_OVERRIDE`, defaults to 2,000 entries), and the sidecar caps v6 decisions independently with `max_decisions_v6` (defaults to 1,000) - a v6 flood can't evict v4 decisions and vice versa. New sidecar metric `crowdsec_sidecar_max_decisions_v6`.
+
+### Upgrade note for v2.6
+- Existing bouncer configs are not rewritten by the installer. Upgrading from v2.5.x retains `disable_ipv6: true` and stays IPv4-only; `setup.sh` now warns. After the hardware test, opt in by setting `disable_ipv6: false` in `/data/crowdsec-bouncer/crowdsec-firewall-bouncer.yaml` and restarting the bouncer. New installs use the v2.6 template with IPv6 on.
+- IPv6 uses a small separate default: 2,000 ipset entries (`MAXELEM_V6_OVERRIDE` can change it) and 1,000 sidecar decisions (`max_decisions_v6` can change it). This adds to the IPv4 set. The prior UDR 40K figure measured total memory, not 40K per set; combined v4+v6 capacity still needs the v2.6 hardware run.
 ### Changed
 - **on-boot-script-2.x is installed for you if missing** - `install.sh` (and so `bootstrap.sh`) now checks for unifi-utilities' on-boot-script-2.x (`udm-boot`). If it's present, nothing changes. If it's missing, the installer downloads `udm-boot.service` from a pinned unifi-common commit, verifies its SHA-256, installs and enables it, then adds the `/data/on_boot.d/99-crowdsec-bouncer.sh` hook. A checksum mismatch or failed download aborts before anything on the device is changed. The pin lives in a marked config block at the top of `install.sh`; nothing is vendored. Opt out with `ONBOOT_AUTO_INSTALL=0`.
 - Links updated: on-boot-script-2.x moved from unifios-utilities to [unifi-common](https://github.com/unifi-utilities/unifi-common).

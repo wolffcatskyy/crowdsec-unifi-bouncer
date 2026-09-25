@@ -41,9 +41,32 @@ Notes:
 
 ## IPv6
 
-The bouncer is **IPv4 only** — IPv6 decisions are not enforced. On dual-stack
-connections a banned host can simply reach you over IPv6. IPv6 support is
-tracked on the [roadmap](../ROADMAP.md).
+**IPv6 can be enforced in v2.6** (beta: not yet verified on real hardware). With
+`disable_ipv6: false` in the bouncer config (the default in the v2.6+ template)
+the bouncer fills a separate inet6 ipset (`crowdsec6-blacklists`) and
+`setup.sh`/`ensure-rules.sh` mirror the DROP rules into `ip6tables` at position
+1. **On v2.5.x and earlier the bouncer is IPv4 only** — IPv6 decisions are not
+enforced, and on dual-stack connections a banned host can simply reach you over
+IPv6. Existing v2.5.x configs retain `disable_ipv6: true` on upgrade; the
+installer does not rewrite them. `setup.sh` warns while IPv6 is off. To opt in
+after hardware verification, set `disable_ipv6: false` in the existing config
+and restart the bouncer. New installs use the v2.6 template with IPv6 on.
+
+The v4 and v6 sets have **separate capacities**: each set has its own
+`maxelem`, and the sidecar caps them independently (`max_decisions` /
+`max_decisions_v6`). Without overrides the v6 set holds at most 2,000 entries and the sidecar
+returns at most 1,000 IPv6 decisions. Set `MAXELEM_V6_OVERRIDE` and
+`max_decisions_v6` explicitly to change them; leave headroom. These entries
+add to the v4 set, and the UDR 40K measured figure was total memory, not
+40K for each set. Combined limits need verification on real hardware.
+
+## UniFi OS 5.x
+
+**OS 5.x: iptables confirmed.** A community capture from a UCG Fiber on UniFi OS
+5.1.12 (Network 10.4.57, [issue #50](https://github.com/wolffcatskyy/crowdsec-unifi-bouncer/issues/50))
+shows the legacy iptables backend with all seven `UBIOS_WAN_*_USER` chains
+present - the same layout this bouncer installs into on OS 4.x. No public
+evidence that UniFi OS 5 moved to nftables. Details: [zone-placement.md](zone-placement.md).
 
 ## Detection Methods
 
@@ -79,13 +102,14 @@ Detection is tried in order:
 | UXG-Lite | **Unsupported** | -- | -- | -- |
 | Unknown device | -- | 10,000 | -- | 8,000 |
 
-"Sidecar Cap" = recommended `max_decisions` for the sidecar proxy, leaving 2,000 entries of headroom for manual bans.
+"Sidecar Cap" = recommended `max_decisions` for the sidecar proxy, leaving 2,000 entries of headroom for manual bans. IPv6 (v2.6+): the inet6 set defaults to 2,000 entries and the sidecar caps it separately with `max_decisions_v6` (defaults to 1,000). The two limits are independent - each set has its own maxelem, so a flood in one family can't evict the other.
 
 ## Environment Variables
 
 | Variable | Description | Default |
 |----------|-------------|---------|
 | `MAXELEM_OVERRIDE` | Manual override for ipset maxelem. Bypasses auto-detection. Logs a warning if it exceeds the recommended limit for your device. | Auto-detected |
+| `MAXELEM_V6_OVERRIDE` | Manual override for the IPv6 ipset (inet6) maxelem. The v6 set is a separate set with its own maxelem; without an override it uses 2,000 entries. | 2,000 |
 | `MEMORY_OPTIMIZED` | Set to `true` to use reduced limits for devices running BGP, ad-blocking, content filtering, or multiple UniFi applications. | `false` |
 
 ## Usage Scenarios
