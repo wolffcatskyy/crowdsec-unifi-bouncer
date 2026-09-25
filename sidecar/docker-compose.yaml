@@ -39,7 +39,8 @@ services:
     depends_on:
       - crowdsec
     healthcheck:
-      test: ["CMD", "wget", "-q", "--spider", "http://localhost:8084/health"]
+      # The image is distroless (no shell/wget); the binary probes its own /health.
+      test: ["CMD", "/usr/local/bin/crowdsec-sidecar", "-healthcheck", "-config", "/etc/crowdsec-sidecar/config.yaml"]
       interval: 30s
       timeout: 5s
       retries: 3
