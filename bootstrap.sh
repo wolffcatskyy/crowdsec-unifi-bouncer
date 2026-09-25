@@ -7,6 +7,10 @@
 #
 # Or with custom options:
 #   curl -sSL https://raw.githubusercontent.com/wolffcatskyy/crowdsec-unifi-bouncer/main/bootstrap.sh | BOUNCER_VERSION=v0.0.41 bash
+#
+# install.sh (run at the end) also sets up on-boot-script-2.x if it is missing,
+# from a pinned commit with SHA-256 verification. To skip that:
+#   curl -sSL https://raw.githubusercontent.com/wolffcatskyy/crowdsec-unifi-bouncer/main/bootstrap.sh | ONBOOT_AUTO_INSTALL=0 bash
 
 set -e
 
