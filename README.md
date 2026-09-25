@@ -36,6 +36,7 @@ Drop-in install of the official [CrowdSec firewall bouncer](https://github.com/c
 - **AbuseIPDB reporting** (v2.4.0) — automatically reports locally-banned IPs to AbuseIPDB, contributing to community threat intelligence
 - **LOG rules for detection** (v2.5.0) — iptables LOG rules make dropped packets visible to CrowdSec, enabling port scan detection and AbuseIPDB reporting
 - **Lightweight** — 15 MB RAM for the bouncer, 8 MB for the sidecar
+- **IPv4 only** — IPv6 decisions are not enforced today (IPv6 support is on the roadmap for v2.6)
 
 ## Table of Contents
 
