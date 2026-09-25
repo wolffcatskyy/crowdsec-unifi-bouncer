@@ -5,6 +5,12 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [Unreleased]
+
+### Added
+- `ipset-capacity-monitor.sh --placement` - read-only check that the crowdsec DROP rules sit above UniFi's firewall/zone chains in `INPUT` and `FORWARD`. Warns if a rule is missing, below a UniFi jump or an ACCEPT, or if native nftables tables appear. Also shown in `--status`.
+- `docs/zone-placement.md` - where the bouncer's rules land relative to UniFi's legacy and zone-based firewall chains on UniFi OS 4 vs 5, sourced and tagged by confidence, plus what would change under nftables.
+
 ## [2.5.4] - 2026-09-24
 
 ### Fixed
