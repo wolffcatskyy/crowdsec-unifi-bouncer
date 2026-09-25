@@ -37,7 +37,7 @@ The sidecar intercepts decision requests from your bouncer, fetches the full dec
 
 1. Intercepts `/v1/decisions` and `/v1/decisions/stream` requests from your bouncer
 2. Fetches all decisions from the real CrowdSec LAPI upstream
-3. Scores each decision across 7 weighted factors
+3. Scores each decision across 8 weighted factors
 4. Sorts by score descending, truncates to `max_decisions`
 5. Caches results to reduce upstream LAPI load
 6. Proxies all other paths directly to upstream (transparent to the bouncer)
@@ -56,9 +56,10 @@ total = (scenario_base * scenario_multiplier)
       + freshness_bonus
       + cidr_bonus
       + recidivism_bonus
+      - feed_confidence_penalty
 ```
 
-### All 7 Scoring Factors
+### All 8 Scoring Factors
 
 | # | Factor | Points | Description |
 |---|--------|--------|-------------|
@@ -69,6 +70,42 @@ total = (scenario_base * scenario_multiplier)
 | 5 | **Freshness bonus** | 0-15 pts | Created < 1 hour ago: 15 pts. Created < 24 hours ago: 10 pts. Created < 7 days ago: 5 pts. Older than 7 days: 0 pts. Prioritizes active, ongoing attacks. |
 | 6 | **CIDR bonus** | 0-20 pts | /0-/16 (large ranges): 20 pts. /17-/24 (medium ranges): 10 pts. /25-/32 (single IPs): 0 pts. Broader ranges block more addresses per ipset entry. |
 | 7 | **Recidivism bonus** | 15 pts per extra decision | If an IP has N decisions, each gets +15*(N-1). An IP with 3 decisions gets +30 per decision. Repeat offenders are promoted to survive truncation. |
+| 8 | **Feed confidence** | 0 to -30 pts | Only for [crowdsec-blocklist-import](https://github.com/wolffcatskyy/crowdsec-blocklist-import) decisions. The source feed and its confidence (0-100) are read from the scenario name, e.g. `external/blocklist-import/spamhaus-drop/c95`. Penalty = (100 - confidence) * 30 / 100: Spamhaus DROP at 95 loses 2 pts, Tor exit nodes at 40 lose 18. Penalty-only, so imports get ranked among themselves and never climb above CAPI, local or manual decisions. Unknown confidence = no change. See [Feed confidence scoring](#feed-confidence-scoring). |
+
+### Feed confidence scoring
+
+Without feed data every bulk import scores the same, so which imported IPs survive truncation is arbitrary. crowdsec-blocklist-import v3.9.0+ can write the source feed and a confidence value into each decision's scenario name (`SCENARIO_FORMAT=structured`). The sidecar parses it and ranks imports by feed quality.
+
+**Scenario formats the sidecar recognizes:**
+
+| Format | Example | Feed | Confidence |
+|--------|---------|------|------------|
+| Structured | `external/blocklist-import/spamhaus-drop/c95` | `spamhaus-drop` | 95 (from name) |
+| Structured, no confidence | `external/blocklist-import/all-sources` | `all-sources` | none |
+| Legacy (importer default) | `external/blocklist (Spamhaus DROP)` | `spamhaus-drop` | none |
+
+Grammar: `<prefix>/<feed-slug>[/c<0-100>]`, where the slug is lowercase letters and digits joined by single hyphens. Anything that doesn't match is treated as a normal scenario and scored exactly as before.
+
+**Where confidence comes from** (first match wins):
+1. `scoring.feed_scoring.feeds` in your config - per-slug override, works for legacy names too
+2. The `/cNN` suffix in the scenario name
+3. Nothing - the decision is left untouched
+
+So existing setups see no change until the importer switches to structured names or you add overrides.
+
+```yaml
+scoring:
+  feed_scoring:
+    enabled: true                  # default
+    max_penalty: 30                # points removed at confidence 0
+    prefixes: ["external/blocklist-import"]
+    legacy_prefixes: ["external/blocklist"]
+    feeds:                         # optional per-feed overrides (0-100)
+      tor-exit-nodes: 20
+      stopforumspam: 40
+```
+
+Per-feed kept/dropped counts are exported as `crowdsec_sidecar_feed_kept{feed=...}` and `crowdsec_sidecar_feed_dropped{feed=...}`, so you can see which feeds actually make it into your ipset and prune the ones that never do.
 
 ### What Survives, What Gets Dropped
 
@@ -181,6 +218,11 @@ scoring:
 | `cidr_bonuses[].max_prefix` | int | -- | Maximum prefix length (inclusive). |
 | `cidr_bonuses[].bonus` | int | -- | Bonus points for decisions in this prefix range. |
 | `recidivism_bonus` | int | `15` | Extra points per additional decision for the same IP. If an IP has 3 decisions, each gets +15*(3-1) = +30. |
+| `feed_scoring.enabled` | bool | `true` | Rank blocklist-import decisions by feed confidence parsed from the scenario name. |
+| `feed_scoring.max_penalty` | int | `30` | Points removed from a decision whose feed confidence is 0. Scales linearly to 0 at confidence 100. |
+| `feed_scoring.prefixes` | []string | `["external/blocklist-import"]` | Structured scenario prefixes (`<prefix>/<feed>[/cNN]`). |
+| `feed_scoring.legacy_prefixes` | []string | `["external/blocklist"]` | Legacy scenario bases (`<base> (<Feed Name>)`). Set `[]` to ignore legacy names. |
+| `feed_scoring.feeds` | map[string]int | `{}` | Per-feed-slug confidence overrides (0-100). Beats the value in the scenario name. |
 
 ### Eviction Mode
 
@@ -486,6 +528,8 @@ All metrics are exposed at the `/metrics` endpoint in Prometheus text format.
 | `crowdsec_sidecar_score_bucket` | gauge | `le` | Cumulative score distribution. Thresholds: 25, 50, 75, 100, 150, 200. |
 | `crowdsec_sidecar_recidivism_ips` | gauge | | Unique IPs that received a recidivism bonus. |
 | `crowdsec_sidecar_recidivism_boosts` | gauge | | Total recidivism bonus points applied across all decisions. |
+| `crowdsec_sidecar_feed_kept` | gauge | `feed` | blocklist-import decisions kept per source feed (top N, rest as "other"). |
+| `crowdsec_sidecar_feed_dropped` | gauge | `feed` | blocklist-import decisions dropped per source feed (top N, rest as "other"). |
 | `crowdsec_sidecar_false_negatives_total` | counter | | IPs that were dropped by scoring but later attacked locally. Should always be 0. |
 | `crowdsec_sidecar_false_negative_check_time` | gauge | | Unix timestamp of the last false-negative check. |
 
