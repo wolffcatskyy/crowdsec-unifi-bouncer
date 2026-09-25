@@ -8,19 +8,25 @@ import (
 	"time"
 
 	"github.com/wolffcatskyy/crowdsec-unifi-bouncer/sidecar/internal/config"
+	"github.com/wolffcatskyy/crowdsec-unifi-bouncer/sidecar/internal/feed"
 	"github.com/wolffcatskyy/crowdsec-unifi-bouncer/sidecar/internal/lapi"
 )
 
 // Scorer calculates priority scores for CrowdSec decisions.
 type Scorer struct {
 	config *config.ScoringConfig
+	feeds  *feed.Parser
 }
 
 // New creates a new Scorer with the given configuration.
 func New(cfg *config.ScoringConfig) *Scorer {
-	return &Scorer{
+	s := &Scorer{
 		config: cfg,
 	}
+	if cfg.FeedScoring.Enabled {
+		s.feeds = feed.NewParser(cfg.FeedScoring.Prefixes, cfg.FeedScoring.LegacyPrefixes)
+	}
+	return s
 }
 
 // Score calculates the priority score for a single decision.
@@ -33,6 +39,8 @@ func New(cfg *config.ScoringConfig) *Scorer {
 //   - Decision type bonus (ban vs captcha)
 //   - Freshness bonus (recently created = higher priority)
 //   - CIDR bonus (broader ranges = higher priority)
+//   - Feed confidence penalty (blocklist-import decisions from low-confidence
+//     feeds rank lower; see config.FeedScoringConfig)
 //
 // Recidivism bonus is applied separately in ScoreAndSort.
 func (s *Scorer) Score(d *lapi.Decision) int {
@@ -69,7 +77,34 @@ func (s *Scorer) Score(d *lapi.Decision) int {
 		score += s.config.GetCIDRBonus(32)
 	}
 
+	// Feed confidence penalty (blocklist-import provenance in scenario name)
+	score -= s.feedPenalty(d)
+
 	return score
+}
+
+// feedPenalty parses blocklist-import provenance from the scenario name,
+// records the feed slug on the decision, and returns the points to subtract.
+// Returns 0 for non-import decisions and for feeds with unknown confidence.
+func (s *Scorer) feedPenalty(d *lapi.Decision) int {
+	d.Feed = ""
+	if s.feeds == nil {
+		return 0
+	}
+	info, ok := s.feeds.Parse(d.Scenario)
+	if !ok {
+		return 0
+	}
+	d.Feed = info.Slug
+
+	fc := &s.config.FeedScoring
+	if conf, ok := fc.Feeds[info.Slug]; ok {
+		return fc.Penalty(conf)
+	}
+	if info.HasConfidence {
+		return fc.Penalty(info.Confidence)
+	}
+	return 0
 }
 
 // calculateTTLBonus returns bonus points based on remaining TTL.
@@ -174,6 +209,10 @@ type Stats struct {
 	RecidivismIPs   int                    // unique IPs that received recidivism bonus
 	RecidivismBoosts int                   // total recidivism bonus points applied across all decisions
 	DroppedIPs      map[string]struct{}    // set of IP values that were dropped (for false-negative checking)
+
+	// Feed metrics (blocklist-import decisions only, keyed by feed slug)
+	FeedKept    map[string]int
+	FeedDropped map[string]int
 }
 
 // ScoreAndTruncateWithStats is like ScoreAndTruncate but also returns stats.
@@ -187,6 +226,8 @@ func (s *Scorer) ScoreAndTruncateWithStats(decisions []lapi.Decision, maxDecisio
 		ScenarioDropped:   make(map[string]int),
 		ScoreBuckets:      make(map[int]int),
 		DroppedIPs:        make(map[string]struct{}),
+		FeedKept:          make(map[string]int),
+		FeedDropped:       make(map[string]int),
 	}
 
 	if len(decisions) == 0 {
@@ -255,6 +296,9 @@ func (s *Scorer) ScoreAndTruncateWithStats(decisions []lapi.Decision, maxDecisio
 	for _, d := range result {
 		stats.OriginKept[d.Origin]++
 		stats.ScenarioKept[d.Scenario]++
+		if d.Feed != "" {
+			stats.FeedKept[d.Feed]++
+		}
 	}
 
 	// Dropped counts and dropped IP set
@@ -263,6 +307,9 @@ func (s *Scorer) ScoreAndTruncateWithStats(decisions []lapi.Decision, maxDecisio
 			stats.OriginDropped[d.Origin]++
 			stats.ScenarioDropped[d.Scenario]++
 			stats.DroppedIPs[d.Value] = struct{}{}
+			if d.Feed != "" {
+				stats.FeedDropped[d.Feed]++
+			}
 		}
 	}
 
