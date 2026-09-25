@@ -14,6 +14,7 @@
 export PATH="/usr/sbin:/usr/bin:/sbin:/bin:$PATH"
 
 IPSET_NAME="crowdsec-blacklists"
+IPSET_V6_NAME="${IPSET_V6_NAME:-crowdsec6-blacklists}"
 BOUNCER_DIR="/data/crowdsec-bouncer"
 LOGFILE="$BOUNCER_DIR/log/memory.log"
 METRICS_SCRIPT="$BOUNCER_DIR/metrics.sh"
@@ -164,6 +165,24 @@ if [ "$IPSET_MAXELEM" -gt 0 ]; then
     fi
 fi
 
+# IPv6 set capacity - the v6 set has its own maxelem, so its limit is tracked
+# independently of the v4 set (see docs/device-compatibility.md).
+if ipset list "$IPSET_V6_NAME" >/dev/null 2>&1; then
+    IPSET6_COUNT=$(ipset list "$IPSET_V6_NAME" -t 2>/dev/null | awk '/^Number of entries:/{print $NF}')
+    IPSET6_COUNT="${IPSET6_COUNT:-0}"
+    IPSET6_MAXELEM=$(ipset list "$IPSET_V6_NAME" -t 2>/dev/null | awk '/^Maxelem:/{print $NF}')
+    IPSET6_MAXELEM="${IPSET6_MAXELEM:-0}"
+    if [ "$IPSET6_MAXELEM" -gt 0 ]; then
+        CAPACITY6_USED=$((IPSET6_COUNT * 100 / IPSET6_MAXELEM))
+        if [ "$CAPACITY6_USED" -ge "$CAPACITY_THRESHOLD" ]; then
+            echo "$(date '+%F %T') CAPACITY: IPv6 ipset at ${CAPACITY6_USED}% ($IPSET6_COUNT/$IPSET6_MAXELEM) - decisions may be dropped" >> "$LOGFILE"
+            logger -t crowdsec-bouncer "CAPACITY WARNING: IPv6 ipset at ${CAPACITY6_USED}% ($IPSET6_COUNT/$IPSET6_MAXELEM) - reduce sidecar max_decisions_v6 setting"
+        elif [ "$CAPACITY6_USED" -ge 80 ]; then
+            echo "$(date '+%F %T') CAPACITY: IPv6 ipset at ${CAPACITY6_USED}% ($IPSET6_COUNT/$IPSET6_MAXELEM) - approaching limit" >> "$LOGFILE"
+        fi
+    fi
+fi
+
 # --- Rule persistence ---
 # Rules are restored at position 1, not merely made present: an existence check
 # alone leaves a rule stranded below UniFi's jumps if reprovisioning inserted
@@ -193,6 +212,24 @@ for chain in INPUT FORWARD; do
             ;;
     esac
 done
+
+# IPv6 mirror - only when the v6 set exists (setup.sh creates it when the
+# bouncer config has disable_ipv6: false).
+if command -v ip6tables >/dev/null 2>&1 && ipset list "$IPSET_V6_NAME" >/dev/null 2>&1; then
+    for chain in INPUT FORWARD; do
+        result=$(ensure_drop_at_top ip6tables "$chain" "$IPSET_V6_NAME")
+        case "$result" in
+            added)
+                logger -t crowdsec-bouncer "Re-added IPv6 $chain DROP rule at position 1"
+                [ -x "$METRICS_SCRIPT" ] && "$METRICS_SCRIPT" --record-rule-restored 2>/dev/null || true
+                ;;
+            moved)
+                logger -t crowdsec-bouncer "Moved IPv6 $chain DROP rule back to position 1 (UniFi jumps had slipped above it)"
+                [ -x "$METRICS_SCRIPT" ] && "$METRICS_SCRIPT" --record-rule-restored 2>/dev/null || true
+                ;;
+        esac
+    done
+fi
 
 # --- LOG rule persistence ---
 # Deploy iptables LOG rules before DROP rules in WAN chains
