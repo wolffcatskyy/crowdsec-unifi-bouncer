@@ -34,6 +34,10 @@ func main() {
 		os.Exit(0)
 	}
 
+	if *healthcheck {
+		os.Exit(runHealthcheck(*configPath))
+	}
+
 	// Load configuration
 	cfg, err := config.Load(*configPath)
 	if err != nil {
