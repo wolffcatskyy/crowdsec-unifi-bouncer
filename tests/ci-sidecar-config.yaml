@@ -1,0 +1,20 @@
+# Sidecar config for the live-LAPI CI job (.github/workflows/live-lapi.yml).
+# max_decisions=3 with 4 decisions seeded, so truncation must drop exactly
+# one: the lowest-confidence import (c30).
+listen_addr: 127.0.0.1:9090
+upstream_lapi_url: http://localhost:8080
+upstream_lapi_key: __BOUNCER_KEY__
+max_decisions: 3
+cache_ttl: 1s
+log_level: info
+metrics:
+  enabled: false
+effectiveness:
+  false_negative_check:
+    enabled: false
+scoring:
+  feed_scoring:
+    enabled: true
+    max_penalty: 30
+    prefixes: ["external/blocklist-import"]
+    legacy_prefixes: ["external/blocklist"]
