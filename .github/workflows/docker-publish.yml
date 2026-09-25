@@ -273,7 +273,7 @@ jobs:
             echo "::error::runtime image unexpectedly contains a shell"; exit 1
           fi
           docker run --rm --entrypoint sh "${IMAGE}:ci-debug" -c 'id && echo debug shell ok'
-          test "$(docker image inspect -f '{{.Config.User}}' "${IMAGE}:ci")" = "65532:65532"
+          test "$(docker image inspect -f '{{.Config.User}}' "${IMAGE}:ci")" = "1000:1000"
           # healthcheck subcommand: unhealthy when nothing is listening
           if docker run --rm "${IMAGE}:ci" -healthcheck; then
             echo "::error::healthcheck passed with no server running"; exit 1
