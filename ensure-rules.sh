@@ -42,6 +42,36 @@ MEM_RECOVERY_MARGIN="${MEM_RECOVERY_MARGIN:-100000}"   # +100MB default
 RECOVERY_CONFIRM_RUNS="${RECOVERY_CONFIRM_RUNS:-2}"    # 2 healthy runs (~10min)
 RECOVERY_THRESHOLD=$((MEM_THRESHOLD + MEM_RECOVERY_MARGIN))
 
+# --- Rule placement helper --------------------------------------------------
+# ensure_drop_at_top <iptables|ip6tables> <chain> <ipset>
+# The bouncer's DROP rules must sit at position 1 of INPUT and FORWARD, ahead of
+# every UniFi-managed jump (TOR, ALIEN, IPS, UBIOS_*). UniFi reprovisioning can
+# insert its jumps ABOVE an existing rule without removing it, so an existence
+# check (-C) alone would leave the rule stranded below the zone chains where an
+# allow policy can accept a banned source first (see docs/zone-placement.md).
+# Missing rule -> insert at position 1. Existing rule not at position 1 ->
+# delete and re-insert at position 1. Prints "added", "moved", or "ok".
+ensure_drop_at_top() {
+    local cmd="$1" chain="$2" set_name="$3" first
+    if "$cmd" -C "$chain" -m set --match-set "$set_name" src -j DROP 2>/dev/null; then
+        first=$("$cmd" -S "$chain" 2>/dev/null | grep -m1 -- "^-A $chain ")
+        case "$first" in
+            "-A $chain -m set --match-set $set_name src -j DROP"*)
+                echo "ok"
+                return 0
+                ;;
+        esac
+        # Rule exists but something sits above it - move it back to the top.
+        "$cmd" -D "$chain" -m set --match-set "$set_name" src -j DROP 2>/dev/null || return 1
+        "$cmd" -I "$chain" 1 -m set --match-set "$set_name" src -j DROP || return 1
+        echo "moved"
+        return 0
+    fi
+    "$cmd" -I "$chain" 1 -m set --match-set "$set_name" src -j DROP || return 1
+    echo "added"
+    return 0
+}
+
 # --- Memory monitoring ---
 
 MEM_AVAIL=$(awk '/^MemAvailable:/{print $2}' /proc/meminfo)
@@ -134,7 +164,10 @@ if [ "$IPSET_MAXELEM" -gt 0 ]; then
     fi
 fi
 
-# --- Rule persistence (existing behavior) ---
+# --- Rule persistence ---
+# Rules are restored at position 1, not merely made present: an existence check
+# alone leaves a rule stranded below UniFi's jumps if reprovisioning inserted
+# them above ours. ensure_drop_at_top handles both cases.
 
 # Only check rules if bouncer is running
 if [ "$BOUNCER_ACTIVE" != "active" ]; then
@@ -146,20 +179,20 @@ if ! ipset list "$IPSET_NAME" >/dev/null 2>&1; then
     exit 0
 fi
 
-# Re-add rules if missing (controller reprovisioning can remove them)
-if ! iptables -C INPUT -m set --match-set "$IPSET_NAME" src -j DROP 2>/dev/null; then
-    iptables -I INPUT 1 -m set --match-set "$IPSET_NAME" src -j DROP
-    logger -t crowdsec-bouncer "Re-added INPUT DROP rule"
-    # Record rule restoration for Prometheus metrics
-    [ -x "$METRICS_SCRIPT" ] && "$METRICS_SCRIPT" --record-rule-restored 2>/dev/null || true
-fi
-
-if ! iptables -C FORWARD -m set --match-set "$IPSET_NAME" src -j DROP 2>/dev/null; then
-    iptables -I FORWARD 1 -m set --match-set "$IPSET_NAME" src -j DROP
-    logger -t crowdsec-bouncer "Re-added FORWARD DROP rule"
-    # Record rule restoration for Prometheus metrics
-    [ -x "$METRICS_SCRIPT" ] && "$METRICS_SCRIPT" --record-rule-restored 2>/dev/null || true
-fi
+for chain in INPUT FORWARD; do
+    result=$(ensure_drop_at_top iptables "$chain" "$IPSET_NAME")
+    case "$result" in
+        added)
+            logger -t crowdsec-bouncer "Re-added $chain DROP rule at position 1"
+            # Record rule restoration for Prometheus metrics
+            [ -x "$METRICS_SCRIPT" ] && "$METRICS_SCRIPT" --record-rule-restored 2>/dev/null || true
+            ;;
+        moved)
+            logger -t crowdsec-bouncer "Moved $chain DROP rule back to position 1 (UniFi jumps had slipped above it)"
+            [ -x "$METRICS_SCRIPT" ] && "$METRICS_SCRIPT" --record-rule-restored 2>/dev/null || true
+            ;;
+    esac
+done
 
 # --- LOG rule persistence ---
 # Deploy iptables LOG rules before DROP rules in WAN chains
@@ -167,4 +200,15 @@ fi
 LOG_RULES_SCRIPT="$BOUNCER_DIR/log-rules.sh"
 if [ -x "$LOG_RULES_SCRIPT" ]; then
     "$LOG_RULES_SCRIPT" --quiet 2>/dev/null || true
+fi
+
+# --- Rule placement drift check (Prometheus gauge) ---
+# Runs on this script's 5-minute cron cadence so drift is caught even when
+# nobody runs --placement by hand. The warning count lands in the metrics
+# endpoint as crowdsec_unifi_bouncer_rule_placement_ok / _warnings.
+PLACEMENT_MONITOR="$BOUNCER_DIR/ipset-capacity-monitor.sh"
+if [ -x "$PLACEMENT_MONITOR" ] && [ -x "$METRICS_SCRIPT" ]; then
+    PLACEMENT_OUT=$("$PLACEMENT_MONITOR" --placement 2>/dev/null || true)
+    PLACEMENT_WARNINGS=$(printf '%s\n' "$PLACEMENT_OUT" | grep -c '\[WARN\]' || true)
+    "$METRICS_SCRIPT" --record-placement "${PLACEMENT_WARNINGS:-0}" 2>/dev/null || true
 fi
