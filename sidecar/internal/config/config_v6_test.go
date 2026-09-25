@@ -2,10 +2,10 @@ package config
 
 import "testing"
 
-func TestEffectiveMaxDecisionsV6FallsBack(t *testing.T) {
+func TestEffectiveMaxDecisionsV6DefaultsLowerThanV4(t *testing.T) {
 	c := &Config{MaxDecisions: 15000}
-	if got := c.EffectiveMaxDecisionsV6(); got != 15000 {
-		t.Errorf("EffectiveMaxDecisionsV6() = %d, want fallback 15000", got)
+	if got := c.EffectiveMaxDecisionsV6(); got != 1000 {
+		t.Errorf("EffectiveMaxDecisionsV6() = %d, want default 1000", got)
 	}
 }
 
