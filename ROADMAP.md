@@ -21,10 +21,10 @@ The one-line bootstrap now defers to `install.sh` to resolve the latest upstream
 ## Next Release
 
 ### IPv6 Support
-- Test ip6tables rules across device models
-- Separate ipset for IPv6 (hash:net family inet6)
-- Add IPv6 toggle with clear documentation
-- Update ensure-rules.sh for IPv6 persistence
+- ~~Separate ipset for IPv6 (hash:net family inet6)~~ — shipped in v2.6 (`crowdsec6-blacklists`)
+- ~~Add IPv6 toggle with clear documentation~~ — shipped in v2.6 (`disable_ipv6: false` in the config template)
+- ~~Update ensure-rules.sh for IPv6 persistence~~ — shipped in v2.6 (v6 rules restored at position 1, same as v4)
+- Test ip6tables rules across device models (hardware runbook, pending)
 
 ### Alerting Integration
 - Webhook support for guardrail events
