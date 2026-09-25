@@ -62,18 +62,55 @@ body:
     validations:
       required: true
 
+  - type: input
+    id: device-model
+    attributes:
+      label: UniFi device model
+      description: e.g., UDM SE, UDR, UCG-Ultra. See docs/device-compatibility.md for supported models.
+      placeholder: "UDM SE"
+    validations:
+      required: true
+
+  - type: input
+    id: unifi-os-version
+    attributes:
+      label: UniFi OS version
+      description: From Settings > System > UniFi OS, or `cat /etc/unifi-os/unifi_version`.
+      placeholder: "4.x.x"
+    validations:
+      required: true
+
+  - type: textarea
+    id: detect-device-output
+    attributes:
+      label: detect-device.sh output
+      description: Run /data/crowdsec-bouncer/detect-device.sh on the device and paste the full output.
+      render: shell
+      placeholder: "Paste the full detect-device.sh output here."
+    validations:
+      required: true
+
+  - type: textarea
+    id: ipset-status
+    attributes:
+      label: ipset list -t output
+      description: Run `ipset list -t crowdsec-blacklists` (or `ipset list -t` for all sets) and paste the output. Required for capacity/"Hash is full" reports.
+      render: shell
+      placeholder: "Paste ipset list -t output here."
+    validations:
+      required: true
+
   - type: textarea
     id: environment
     attributes:
       label: Environment
       description: Provide details about your setup.
       value: |
-        - OS:
         - Project version / commit:
-        - Runtime (Python/Node/Docker version):
         - CrowdSec version:
-        - UniFi Controller version:
-        - UniFi firmware version:
+        - Upstream cs-firewall-bouncer version:
+        - UniFi Controller (Network application) version:
+        - Sidecar deployed (yes/no):
         - Related services:
     validations:
       required: true
