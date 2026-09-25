@@ -41,7 +41,7 @@ declare -A DEVICE_MAXELEM=(
     ["UDR7"]=15000
     ["UX7"]=15000
 
-    # Unsupported (no firewall group/ipset support)
+    # Unsupported: no validated on-device install/persistence path (see discussion #48)
     ["UX"]=0
     ["UXG-Lite"]=0
 )
@@ -251,7 +251,7 @@ print_startup_info() {
     case "$status" in
         ERROR)
             echo "[ERROR] Detected device model: ${norm_model}"
-            echo "[ERROR] This device does not support firewall groups/ipsets"
+            echo "[ERROR] This device has no validated on-device install/persistence path (see discussion #48)"
             echo "[ERROR] crowdsec-unifi-bouncer cannot run on this device"
             return 1
             ;;

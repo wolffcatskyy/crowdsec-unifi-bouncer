@@ -158,7 +158,7 @@ Without on-boot-script, run this after each firmware update:
 
 ## Device Compatibility
 
-The bouncer auto-detects your UniFi device model and applies safe ipset limits. Supported tiers: Enterprise (80K), Pro (50K), Consumer (15K). UX and UXG-Lite are not supported.
+The bouncer auto-detects your UniFi device model and applies safe ipset limits. Supported tiers: Enterprise (80K), Pro (50K), Consumer (15K). UX is not supported. UXG-Lite is unvalidated: it has ipset, but there is no tested on-device install/persistence path yet.
 
 See [docs/device-compatibility.md](docs/device-compatibility.md) for the full device matrix, environment variables, and usage scenarios.
 

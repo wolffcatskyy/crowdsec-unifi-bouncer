@@ -34,6 +34,10 @@ Notes:
 - Memory is a secondary constraint: 120K entries is only ~5.5 MB of kernel
   memory. The primary constraint is Network app stability — raise limits
   incrementally and watch the controller.
+- The defaults above are derived from Ubiquiti's own published per-device
+  capacity figures; they are not measurements from this project. "Untested
+  with this bouncer" means not validated on that hardware - it does not mean
+  the hardware lacks the capability.
 - Older claims you may still see quoted: "15K-30K entries depending on model"
   (old README), "120K+ capacity" (v2.0 notes, applies to UDM SE-class hardware
   only), and "50K/80K" (spec-derived defaults). The table above supersedes them.
@@ -99,8 +103,10 @@ Detection is tried in order:
 | UDR7 | Consumer | 15,000 | -- | 13,000 |
 | UX7 | Consumer | 15,000 | -- | 13,000 |
 | UX | **Unsupported** | -- | -- | -- |
-| UXG-Lite | **Unsupported** | -- | -- | -- |
+| UXG-Lite | **Unvalidated** | -- | -- | -- |
 | Unknown device | -- | 10,000 | -- | 8,000 |
+
+**Why is UXG-Lite "Unvalidated" and not "Unsupported"?** The UXG-Lite does have ipset - community dynamic-blocklist scripts drive it directly. It is listed as unvalidated because there is no tested on-device install/persistence path for the bouncer binary: unifios-utilities' on-boot-script covers the UDM/UDR family, uxg-boot covers the UXG-Pro only, and the Lite's hardware (1 GHz dual-core Cortex-A53, 1 GB RAM) is far below every tested device. See [discussion #48](https://github.com/wolffcatskyy/crowdsec-unifi-bouncer/discussions/48) - if you have a UXG-Lite and want to help validate it, start there.
 
 "Sidecar Cap" = recommended `max_decisions` for the sidecar proxy, leaving 2,000 entries of headroom for manual bans. IPv6 (v2.6+): the inet6 set defaults to 2,000 entries and the sidecar caps it separately with `max_decisions_v6` (defaults to 1,000). The two limits are independent - each set has its own maxelem, so a flood in one family can't evict the other.
 
@@ -144,7 +150,7 @@ MEMORY_OPTIMIZED=true /data/crowdsec-bouncer/setup.sh
 **Scenario 5: Unsupported device**
 ```
 [ERROR] Detected device model: UXG-Lite
-[ERROR] This device does not support firewall groups/ipsets
+[ERROR] This device has no validated on-device install/persistence path (see discussion #48)
 [ERROR] crowdsec-unifi-bouncer cannot run on this device
 ```
 
