@@ -1,9 +1,18 @@
 name: Docker Publish
 
+# Tag pushes (v*) publish the sidecar image directly, as before.
+# Pull requests that touch the sidecar build both variants without publishing
+# and dry-run the SBOM, signing and attestation steps against a throwaway
+# local registry.
+
 on:
   push:
     tags:
       - 'v*'
+  pull_request:
+    paths:
+      - 'sidecar/**'
+      - '.github/workflows/docker-publish.yml'
   workflow_dispatch:
     inputs:
       tag:
@@ -13,24 +22,29 @@ on:
 
 jobs:
   build-and-push:
-    name: Build and Push Sidecar Image
+    name: Build, Sign and Push Sidecar Image
+    if: github.event_name != 'pull_request'
     runs-on: ubuntu-latest
     permissions:
-      contents: read
-      packages: write
+      contents: write   # attach the SBOM to an existing GitHub release
+      packages: write   # push to GHCR
+      id-token: write   # OIDC token for keyless Cosign signing
     env:
       GHCR_IMAGE: ghcr.io/${{ github.repository_owner }}/crowdsec-sidecar
       DOCKERHUB_USERNAME: ${{ secrets.DOCKERHUB_USERNAME }}
       DOCKERHUB_TOKEN: ${{ secrets.DOCKERHUB_TOKEN }}
     steps:
       - name: Checkout code
-        uses: actions/checkout@v4
+        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262  # v4
 
       - name: Set up QEMU
-        uses: docker/setup-qemu-action@v3
+        uses: docker/setup-qemu-action@c7c53464625b32c7a7e944ae62b3e17d2b600130  # v3
 
       - name: Set up Docker Buildx
-        uses: docker/setup-buildx-action@v3
+        uses: docker/setup-buildx-action@8d2750c68a42422c14e847fe6c8ac0403b4cbd6f  # v3
+
+      - name: Install Cosign
+        uses: sigstore/cosign-installer@398d4b0eeef1380460a10c8013a76f728fb906ac  # v3
 
       - name: Extract version from tag
         id: version
@@ -46,7 +60,7 @@ jobs:
           echo "build_time=$(date -u +'%Y-%m-%dT%H:%M:%SZ')" >> "$GITHUB_OUTPUT"
 
       - name: Log in to GitHub Container Registry
-        uses: docker/login-action@v3
+        uses: docker/login-action@c94ce9fb468520275223c153574b00df6fe4bcc9  # v3
         with:
           registry: ghcr.io
           username: ${{ github.actor }}
@@ -54,7 +68,7 @@ jobs:
 
       - name: Log in to Docker Hub
         if: env.DOCKERHUB_USERNAME != '' && env.DOCKERHUB_TOKEN != ''
-        uses: docker/login-action@v3
+        uses: docker/login-action@c94ce9fb468520275223c153574b00df6fe4bcc9  # v3
         with:
           username: ${{ secrets.DOCKERHUB_USERNAME }}
           password: ${{ secrets.DOCKERHUB_TOKEN }}
@@ -63,25 +77,261 @@ jobs:
         id: tags
         run: |
           VERSION="${{ steps.version.outputs.version }}"
-          TAGS="${{ env.GHCR_IMAGE }}:${VERSION}"
-          TAGS="${TAGS},${{ env.GHCR_IMAGE }}:latest"
-
+          REPOS="${{ env.GHCR_IMAGE }}"
           if [[ -n "${DOCKERHUB_USERNAME}" && -n "${DOCKERHUB_TOKEN}" ]]; then
-            TAGS="${TAGS},${DOCKERHUB_USERNAME}/crowdsec-sidecar:${VERSION}"
-            TAGS="${TAGS},${DOCKERHUB_USERNAME}/crowdsec-sidecar:latest"
+            REPOS="${REPOS} ${DOCKERHUB_USERNAME}/crowdsec-sidecar"
           fi
 
-          echo "tags=${TAGS}" >> "$GITHUB_OUTPUT"
+          TAGS=""
+          DEBUG_TAGS=""
+          for REPO in ${REPOS}; do
+            TAGS="${TAGS},${REPO}:${VERSION}"
+            DEBUG_TAGS="${DEBUG_TAGS},${REPO}:debug"
+            if [[ "${VERSION}" != "latest" ]]; then
+              TAGS="${TAGS},${REPO}:latest"
+              DEBUG_TAGS="${DEBUG_TAGS},${REPO}:${VERSION}-debug"
+            fi
+          done
 
-      - name: Build and push
-        uses: docker/build-push-action@v5
+          {
+            echo "repos=${REPOS}"
+            echo "tags=${TAGS#,}"
+            echo "debug_tags=${DEBUG_TAGS#,}"
+          } >> "$GITHUB_OUTPUT"
+
+      - name: Build and push (runtime, distroless)
+        id: build
+        uses: docker/build-push-action@10e90e3645eae34f1e60eeb005ba3a3d33f178e8  # v6
         with:
           context: sidecar
+          target: runtime
           platforms: linux/amd64,linux/arm64
           push: true
           tags: ${{ steps.tags.outputs.tags }}
           build-args: |
             VERSION=${{ steps.version.outputs.version }}
             BUILD_TIME=${{ steps.version.outputs.build_time }}
-          cache-from: type=gha
-          cache-to: type=gha,mode=max
+          cache-from: type=gha,scope=sidecar-runtime
+          cache-to: type=gha,mode=max,scope=sidecar-runtime
+
+      - name: Build and push (debug, with shell)
+        id: build-debug
+        uses: docker/build-push-action@10e90e3645eae34f1e60eeb005ba3a3d33f178e8  # v6
+        with:
+          context: sidecar
+          target: debug
+          platforms: linux/amd64,linux/arm64
+          push: true
+          tags: ${{ steps.tags.outputs.debug_tags }}
+          build-args: |
+            VERSION=${{ steps.version.outputs.version }}
+            BUILD_TIME=${{ steps.version.outputs.build_time }}
+          cache-from: type=gha,scope=sidecar-debug
+          cache-to: type=gha,mode=max,scope=sidecar-debug
+
+      - name: Generate SBOM (CycloneDX, runtime)
+        uses: anchore/sbom-action@e22c389904149dbc22b58101806040fa8d37a610  # v0
+        with:
+          image: ${{ env.GHCR_IMAGE }}@${{ steps.build.outputs.digest }}
+          format: cyclonedx-json
+          output-file: crowdsec-sidecar.sbom.cyclonedx.json
+          upload-artifact: false
+          upload-release-assets: false
+
+      - name: Generate SBOM (CycloneDX, debug)
+        uses: anchore/sbom-action@e22c389904149dbc22b58101806040fa8d37a610  # v0
+        with:
+          image: ${{ env.GHCR_IMAGE }}@${{ steps.build-debug.outputs.digest }}
+          format: cyclonedx-json
+          output-file: crowdsec-sidecar-debug.sbom.cyclonedx.json
+          upload-artifact: false
+          upload-release-assets: false
+
+      - name: Sign images and attach SBOM attestations (Cosign keyless)
+        env:
+          DIGEST: ${{ steps.build.outputs.digest }}
+          DEBUG_DIGEST: ${{ steps.build-debug.outputs.digest }}
+          REPOS: ${{ steps.tags.outputs.repos }}
+        run: |
+          for REPO in ${REPOS}; do
+            cosign sign --yes "${REPO}@${DIGEST}"
+            cosign attest --yes --type cyclonedx \
+              --predicate crowdsec-sidecar.sbom.cyclonedx.json "${REPO}@${DIGEST}"
+            cosign sign --yes "${REPO}@${DEBUG_DIGEST}"
+            cosign attest --yes --type cyclonedx \
+              --predicate crowdsec-sidecar-debug.sbom.cyclonedx.json "${REPO}@${DEBUG_DIGEST}"
+          done
+
+      - name: Verify signatures
+        env:
+          DIGEST: ${{ steps.build.outputs.digest }}
+          DEBUG_DIGEST: ${{ steps.build-debug.outputs.digest }}
+        run: |
+          IDENTITY="^https://github.com/${{ github.repository }}/.github/workflows/docker-publish.yml@"
+          for D in "${DIGEST}" "${DEBUG_DIGEST}"; do
+            cosign verify "${GHCR_IMAGE}@${D}" \
+              --certificate-identity-regexp="${IDENTITY}" \
+              --certificate-oidc-issuer="https://token.actions.githubusercontent.com" > /dev/null
+          done
+          echo "Signatures verified"
+
+      - name: Upload SBOM artifact
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02  # v4
+        with:
+          name: sbom-cyclonedx
+          path: '*.sbom.cyclonedx.json'
+          if-no-files-found: error
+
+      - name: Attach SBOM to GitHub release (if one exists for this tag)
+        if: github.ref_type == 'tag'
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          TAG: ${{ github.ref_name }}
+        run: |
+          if gh release view "${TAG}" > /dev/null 2>&1; then
+            gh release upload "${TAG}" ./*.sbom.cyclonedx.json --clobber
+          else
+            echo "No GitHub release for ${TAG} yet; SBOM is on the workflow run and attested on the image."
+          fi
+
+      - name: Summary
+        env:
+          VERSION: ${{ steps.version.outputs.version }}
+          DIGEST: ${{ steps.build.outputs.digest }}
+          DEBUG_DIGEST: ${{ steps.build-debug.outputs.digest }}
+        run: |
+          {
+            echo "### crowdsec-sidecar ${VERSION}"
+            echo ""
+            echo "| Variant | Digest |"
+            echo "|---|---|"
+            echo "| runtime | \`${DIGEST}\` |"
+            echo "| debug | \`${DEBUG_DIGEST}\` |"
+            echo ""
+            echo "Signed with Cosign (keyless OIDC); CycloneDX SBOM attached as an attestation."
+          } >> "$GITHUB_STEP_SUMMARY"
+
+  verify:
+    name: Verify build, SBOM and signing (no publish)
+    if: github.event_name == 'pull_request'
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    services:
+      registry:
+        image: registry:2
+        ports:
+          - 5000:5000
+    env:
+      IMAGE: localhost:5000/crowdsec-sidecar
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262  # v4
+
+      - name: Set up QEMU
+        uses: docker/setup-qemu-action@c7c53464625b32c7a7e944ae62b3e17d2b600130  # v3
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@8d2750c68a42422c14e847fe6c8ac0403b4cbd6f  # v3
+        with:
+          driver-opts: network=host
+
+      - name: Install Cosign
+        uses: sigstore/cosign-installer@398d4b0eeef1380460a10c8013a76f728fb906ac  # v3
+
+      - name: Build runtime (multi-arch) to local registry
+        id: build
+        uses: docker/build-push-action@10e90e3645eae34f1e60eeb005ba3a3d33f178e8  # v6
+        with:
+          context: sidecar
+          target: runtime
+          platforms: linux/amd64,linux/arm64
+          push: true
+          tags: ${{ env.IMAGE }}:ci
+          build-args: VERSION=ci-${{ github.sha }}
+          cache-from: type=gha,scope=sidecar-runtime
+
+      - name: Build debug (multi-arch) to local registry
+        id: build-debug
+        uses: docker/build-push-action@10e90e3645eae34f1e60eeb005ba3a3d33f178e8  # v6
+        with:
+          context: sidecar
+          target: debug
+          platforms: linux/amd64,linux/arm64
+          push: true
+          tags: ${{ env.IMAGE }}:ci-debug
+          build-args: VERSION=ci-${{ github.sha }}
+          cache-from: type=gha,scope=sidecar-debug
+
+      - name: Smoke test images
+        run: |
+          docker pull "${IMAGE}:ci"
+          docker pull "${IMAGE}:ci-debug"
+          docker run --rm "${IMAGE}:ci" -version
+          # runtime must have no shell; debug must have one
+          if docker run --rm --entrypoint /bin/sh "${IMAGE}:ci" -c true 2>/dev/null; then
+            echo "::error::runtime image unexpectedly contains a shell"; exit 1
+          fi
+          docker run --rm --entrypoint sh "${IMAGE}:ci-debug" -c 'id && echo debug shell ok'
+          test "$(docker image inspect -f '{{.Config.User}}' "${IMAGE}:ci")" = "65532:65532"
+          # healthcheck subcommand: unhealthy when nothing is listening
+          if docker run --rm "${IMAGE}:ci" -healthcheck; then
+            echo "::error::healthcheck passed with no server running"; exit 1
+          fi
+
+      - name: Report image sizes
+        run: |
+          {
+            echo "### Image sizes"
+            echo ""
+            echo "| Image | Arch | Compressed (registry) | Uncompressed |"
+            echo "|---|---|---|---|"
+          } >> "$GITHUB_STEP_SUMMARY"
+          for TAG in ci ci-debug; do
+            for ARCH in amd64 arm64; do
+              MANIFEST=$(docker buildx imagetools inspect "${IMAGE}:${TAG}" --raw \
+                | jq -r --arg a "${ARCH}" \
+                  '.manifests[] | select(.platform.architecture == $a) | .digest')
+              COMPRESSED=$(curl -s -H 'Accept: application/vnd.oci.image.manifest.v1+json' \
+                "http://localhost:5000/v2/crowdsec-sidecar/manifests/${MANIFEST}" | jq '[.layers[].size] | add')
+              docker pull -q --platform "linux/${ARCH}" "${IMAGE}:${TAG}" > /dev/null
+              UNCOMPRESSED=$(docker image inspect -f '{{.Size}}' "${IMAGE}:${TAG}")
+              echo "${TAG} ${ARCH}: compressed=${COMPRESSED} uncompressed=${UNCOMPRESSED}"
+              ROW="| ${TAG} | ${ARCH} | $((COMPRESSED / 1024)) KiB | $((UNCOMPRESSED / 1024)) KiB |"
+              echo "${ROW}" >> "$GITHUB_STEP_SUMMARY"
+            done
+          done
+
+      - name: Generate SBOM (CycloneDX)
+        uses: anchore/sbom-action@e22c389904149dbc22b58101806040fa8d37a610  # v0
+        with:
+          image: ${{ env.IMAGE }}@${{ steps.build.outputs.digest }}
+          format: cyclonedx-json
+          output-file: crowdsec-sidecar.sbom.cyclonedx.json
+          upload-artifact: false
+
+      - name: Validate SBOM
+        run: |
+          jq -e '.bomFormat == "CycloneDX" and (.components | length) > 0' crowdsec-sidecar.sbom.cyclonedx.json
+          jq -r '.components[] | select(.type == "library") | .name' crowdsec-sidecar.sbom.cyclonedx.json \
+            | grep -q 'gopkg.in/yaml.v3' && echo "SBOM lists Go module deps"
+
+      - name: Dry-run signing and attestation (ephemeral key, no transparency log)
+        env:
+          COSIGN_PASSWORD: ''
+          REF: ${{ env.IMAGE }}@${{ steps.build.outputs.digest }}
+        run: |
+          # Release builds sign keyless via OIDC. This exercises the same
+          # sign/attest/verify commands with a throwaway key so PRs never
+          # touch the public registry or Rekor.
+          cosign generate-key-pair
+          cosign sign --yes --key cosign.key --tlog-upload=false \
+            --allow-insecure-registry "${REF}"
+          cosign attest --yes --key cosign.key --tlog-upload=false \
+            --allow-insecure-registry --type cyclonedx \
+            --predicate crowdsec-sidecar.sbom.cyclonedx.json "${REF}"
+          cosign verify --key cosign.pub --insecure-ignore-tlog=true \
+            --allow-insecure-registry "${REF}" > /dev/null
+          cosign verify-attestation --key cosign.pub --insecure-ignore-tlog=true \
+            --allow-insecure-registry --type cyclonedx "${REF}" > /dev/null
+          echo "Sign/attest/verify dry-run passed"
