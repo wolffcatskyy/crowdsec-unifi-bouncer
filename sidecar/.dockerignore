@@ -1,0 +1,5 @@
+bin/
+dist/
+config.yaml
+coverage.out
+coverage.html
