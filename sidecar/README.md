@@ -414,13 +414,13 @@ The included multi-stage Dockerfile builds a minimal distroless image:
   includes CA certificates and tzdata (`TZ=` still works)
 - `debug` target: same binary on `distroless/static-debian12:debug-nonroot` (busybox shell)
 - Base images pinned by digest
-- Runs as non-root (UID/GID `65532:65532`)
+- Runs as non-root (UID/GID `1000:1000`, same as previous releases)
 - Built-in healthcheck via `crowdsec-sidecar -healthcheck` (probes `listen_addr` + `health.path` from the config)
 - Exposes port 8084
 
-> **Upgrading from v2.5.x or earlier:** the image used to run as UID 1000 on Alpine and ship `wget`.
-> It now runs as UID 65532 with no shell. Make sure your mounted `config.yaml` is readable by
-> UID 65532 (e.g. `chmod 644`), and change any compose healthcheck that calls `wget` to
+> **Upgrading from v2.5.x or earlier:** the image still runs as UID 1000, so mounted
+> `config.yaml` permissions are unaffected. The one breaking change: the image no longer has a
+> shell or `wget`, so any compose healthcheck that calls `wget` fails on the new image. Switch it to
 > `["CMD", "/usr/local/bin/crowdsec-sidecar", "-healthcheck", "-config", "/etc/crowdsec-sidecar/config.yaml"]`.
 
 ---
