@@ -14,6 +14,16 @@ crontab -l | grep ensure-rules
 /data/crowdsec-bouncer/ensure-rules.sh
 ```
 
+## Banned IPs still get through
+
+Check that the crowdsec DROP rules sit above UniFi's firewall and zone chains:
+
+```bash
+/data/crowdsec-bouncer/ipset-capacity-monitor.sh --placement
+```
+
+See [zone-placement.md](zone-placement.md) for what the warnings mean.
+
 ## Service gone after firmware update
 
 Firmware updates reset `/etc` and root's crontab. This re-links and enables the service, restores the cron jobs, and starts the bouncer:
