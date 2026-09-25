@@ -8,6 +8,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ## [Unreleased]
 
 ### Added
+- **Feed confidence scoring (8th scoring factor)** - The sidecar now ranks crowdsec-blocklist-import decisions by source-feed quality instead of treating all bulk imports the same. Feed and confidence are parsed from the scenario name (`external/blocklist-import/<feed>/c<0-100>`, written by blocklist-import with `SCENARIO_FORMAT=structured`). Legacy names (`external/blocklist (Feed Name)`) are recognized too and can get confidence from the new `scoring.feed_scoring.feeds` overrides. Penalty-only (default up to -30 pts), so imports never climb above CAPI, local or manual decisions; decisions with unknown confidence score exactly as before.
+- `crowdsec_sidecar_feed_kept{feed}` and `crowdsec_sidecar_feed_dropped{feed}` metrics.
+- **Live LAPI CI test** (`.github/workflows/live-lapi.yml`) - Runs crowdsec-blocklist-import with `SCENARIO_FORMAT=structured` against a real CrowdSec container, points the sidecar at that LAPI, and asserts scenarios round-trip byte-for-byte and that truncation drops the lowest-confidence import first while a manual ban survives. Also asserts the LAPI has no online API credentials or console enrollment, so imported alerts cannot leak upstream as community signals.
+
+### Release plan
+- Feed confidence scoring ships as opt-in in **v2.6** (importer v3.9, `SCENARIO_FORMAT=structured`).
+- Structured becomes the importer default in **v4.0**, staged through its `PRESET` mechanism.
+- No public claims about the combined feature until it has run on real UniFi hardware (the CI live-LAPI run covers the software side).
 - `ipset-capacity-monitor.sh --placement` - read-only check that the crowdsec DROP rules sit above UniFi's firewall/zone chains in `INPUT` and `FORWARD`. Warns if a rule is missing, below a UniFi jump or an ACCEPT, or if native nftables tables appear. Also shown in `--status`.
 - `docs/zone-placement.md` - where the bouncer's rules land relative to UniFi's legacy and zone-based firewall chains on UniFi OS 4 vs 5, sourced and tagged by confidence, plus what would change under nftables.
 

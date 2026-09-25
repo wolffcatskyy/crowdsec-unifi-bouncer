@@ -1,0 +1,116 @@
+name: Live LAPI feed-scoring test
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+
+# Full-chain test: crowdsec-blocklist-import (SCENARIO_FORMAT=structured)
+# writes decisions into a real CrowdSec LAPI container, and the sidecar from
+# this repo serves them to a bouncer with max_decisions forcing truncation.
+jobs:
+  live-lapi:
+    name: Importer -> live LAPI -> sidecar
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout (sidecar)
+        uses: actions/checkout@v4
+
+      - name: Set up Go
+        uses: actions/setup-go@v5
+        with:
+          go-version: '1.23'
+
+      - name: Set up Python 3.11
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+
+      - name: Clone crowdsec-blocklist-import
+        # Prefer the feature branch while it exists; fall back to main once
+        # the structured-format feature has merged there.
+        run: |
+          git clone --quiet https://github.com/wolffcatskyy/crowdsec-blocklist-import.git importer
+          cd importer
+          if git ls-remote --exit-code --heads origin feat/structured-scenarios > /dev/null; then
+            git checkout --quiet feat/structured-scenarios
+          fi
+          grep -q SCENARIO_FORMAT blocklist_import.py
+          pip install -r requirements.txt
+
+      - name: Start CrowdSec LAPI (no upstream API, no console enrollment)
+        run: |
+          docker run -d --name crowdsec -p 8080:8080 \
+            -e DISABLE_ONLINE_API=true \
+            -e CROWDSEC_BYPASS_DB_VOLUME_CHECK=true \
+            crowdsecurity/crowdsec:v1.8.1
+          for i in $(seq 1 60); do
+            code=$(curl -s -o /dev/null -w '%{http_code}' http://localhost:8080/v1/decisions || true)
+            if [ "$code" != "000" ]; then echo "LAPI up (HTTP $code)"; break; fi
+            sleep 2
+          done
+          [ "$code" != "000" ] || { docker logs crowdsec; exit 1; }
+          docker exec crowdsec cscli machines add ci-importer --password ci-importer-pass --force
+          docker exec crowdsec cscli machines validate ci-importer || true
+          docker exec crowdsec cscli bouncers add ci-bouncer -o raw > bouncer-key.txt
+          test -s bouncer-key.txt
+
+      - name: Serve test feeds
+        run: |
+          python3 -m http.server 8899 --directory importer/tests/fixtures &
+          sleep 1
+          curl -sf http://localhost:8899/feed-low.txt
+          curl -sf http://localhost:8899/feed-high.txt
+
+      - name: Seed the LAPI with the real importer (structured scenarios)
+        env:
+          CROWDSEC_LAPI_URL: http://localhost:8080
+          CROWDSEC_MACHINE_ID: ci-importer
+          CROWDSEC_MACHINE_PASSWORD: ci-importer-pass
+          SCENARIO_FORMAT: structured
+          BLOCKLISTS_OPT_IN: "true"
+          CUSTOM_BLOCKLISTS: http://localhost:8899/feed-low.txt,http://localhost:8899/feed-high.txt
+          FEED_CONFIDENCE: custom-blocklist-0=30,custom-blocklist-1=95
+          DECISION_DURATION: 4h
+          TELEMETRY_ENABLED: "false"
+          METRICS_ENABLED: "false"
+          CROWDSEC_HEARTBEAT_INTERVAL: "0"
+        run: python3 importer/blocklist_import.py
+
+      - name: Add a manual ban (must always survive truncation)
+        run: |
+          docker exec crowdsec cscli decisions add \
+            --ip 203.0.113.50 --duration 4h --type ban \
+            --reason "manual test ban"
+          docker exec crowdsec cscli decisions list -o json
+
+      - name: Build and start the sidecar
+        run: |
+          cd sidecar
+          go build -o /tmp/sidecar-bin ./cmd/sidecar
+          cd ..
+          sed "s/__BOUNCER_KEY__/$(cat bouncer-key.txt)/" tests/ci-sidecar-config.yaml > /tmp/ci-config.yaml
+          /tmp/sidecar-bin -config /tmp/ci-config.yaml > sidecar.log 2>&1 &
+          for i in $(seq 1 30); do
+            if curl -sf http://127.0.0.1:9090/health > /dev/null; then echo "sidecar up"; break; fi
+            sleep 1
+          done
+          curl -sf http://127.0.0.1:9090/health
+
+      - name: Assert eviction order and byte-for-byte scenarios through the sidecar
+        run: |
+          curl -sf "http://127.0.0.1:9090/v1/decisions/stream?startup=true" \
+            | tee stream.json \
+            | python3 tests/assert_feed_scoring.py
+
+      - name: Assert Central API is disabled (imported alerts cannot leak upstream)
+        run: |
+          oc=$(docker exec crowdsec cscli config show --key Config.API.Server.OnlineClient)
+          [ "$oc" = "nil" ] || { echo "online_client configured: $oc"; exit 1; }
+          if out=$(docker exec crowdsec cscli capi status 2>&1); then
+            echo "CAPI unexpectedly configured: $out"; exit 1
+          fi
+          echo "$out" | grep -q "no configuration for Central API" || { echo "unexpected: $out"; exit 1; }
+          docker exec crowdsec sh -c 'test ! -s /etc/crowdsec/online_api_credentials.yaml'

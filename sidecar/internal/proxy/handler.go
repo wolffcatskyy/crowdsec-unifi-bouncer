@@ -389,6 +389,19 @@ func (h *Handler) handleMetrics(w http.ResponseWriter, r *http.Request) {
 		"gauge",
 		cacheStats.ScenarioDropped, topN)
 
+	// Per-feed kept/dropped for blocklist-import decisions (v2.6.0)
+	h.writeTopNLabeledMetric(w,
+		"crowdsec_sidecar_feed_kept",
+		"blocklist-import decisions kept per source feed (top N)",
+		"gauge", "feed",
+		cacheStats.FeedKept, topN)
+
+	h.writeTopNLabeledMetric(w,
+		"crowdsec_sidecar_feed_dropped",
+		"blocklist-import decisions dropped per source feed (top N)",
+		"gauge", "feed",
+		cacheStats.FeedDropped, topN)
+
 	// Score distribution
 	fmt.Fprintf(w, "# HELP crowdsec_sidecar_score_cutoff Lowest score that survived truncation\n")
 	fmt.Fprintf(w, "# TYPE crowdsec_sidecar_score_cutoff gauge\n")
@@ -483,6 +496,11 @@ func (h *Handler) handleMetrics(w http.ResponseWriter, r *http.Request) {
 // writeTopNMetric writes a Prometheus metric for the top N entries of a map,
 // aggregating the rest under "other".
 func (h *Handler) writeTopNMetric(w http.ResponseWriter, name, help, metricType string, data map[string]int, n int) {
+	h.writeTopNLabeledMetric(w, name, help, metricType, "scenario", data, n)
+}
+
+// writeTopNLabeledMetric is writeTopNMetric with a configurable label name.
+func (h *Handler) writeTopNLabeledMetric(w http.ResponseWriter, name, help, metricType, label string, data map[string]int, n int) {
 	fmt.Fprintf(w, "# HELP %s %s\n", name, help)
 	fmt.Fprintf(w, "# TYPE %s %s\n", name, metricType)
 
@@ -507,7 +525,7 @@ func (h *Handler) writeTopNMetric(w http.ResponseWriter, name, help, metricType 
 	otherCount := 0
 	for i, entry := range sorted {
 		if i < n {
-			fmt.Fprintf(w, "%s{scenario=%q} %d\n", name, entry.key, entry.value)
+			fmt.Fprintf(w, "%s{%s=%q} %d\n", name, label, entry.key, entry.value)
 		} else {
 			otherCount += entry.value
 		}
@@ -515,7 +533,7 @@ func (h *Handler) writeTopNMetric(w http.ResponseWriter, name, help, metricType 
 
 	// Emit "other" if there are overflow entries
 	if otherCount > 0 {
-		fmt.Fprintf(w, "%s{scenario=\"other\"} %d\n", name, otherCount)
+		fmt.Fprintf(w, "%s{%s=\"other\"} %d\n", name, label, otherCount)
 	}
 }
 

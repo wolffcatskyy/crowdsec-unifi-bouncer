@@ -45,7 +45,7 @@ log_level: "info"
 
 # Scoring configuration
 # Higher scores = higher priority (kept when truncating)
-# Total score = (scenario * multiplier) + origin + TTL + decision_type + freshness + CIDR + recidivism
+# Total score = (scenario * multiplier) + origin + TTL + decision_type + freshness + CIDR + recidivism - feed_penalty
 scoring:
   # Scenario multiplier (applied to all scenario base scores)
   # Default: 2.0 — makes scenario the dominant scoring factor
@@ -118,6 +118,22 @@ scoring:
   # Recidivism bonus: extra points per additional decision for the same IP
   # If an IP has 3 decisions, each gets +30 (15 * 2)
   recidivism_bonus: 15
+
+  # Feed confidence (v2.6.0): rank crowdsec-blocklist-import decisions by the
+  # quality of their source feed. Feed and confidence are read from the scenario
+  # name, e.g. external/blocklist-import/spamhaus-drop/c95 (importer setting
+  # SCENARIO_FORMAT=structured). Penalty-only: (100 - confidence) * max_penalty / 100
+  # is subtracted, so imports never outrank CAPI, local or manual decisions.
+  # Decisions with no known confidence are left untouched.
+  feed_scoring:
+    enabled: true
+    max_penalty: 30
+    prefixes: ["external/blocklist-import"]
+    legacy_prefixes: ["external/blocklist"]   # "external/blocklist (Feed Name)"
+    # Optional per-feed-slug overrides (0-100); beat the value in the scenario name
+    # feeds:
+    #   tor-exit-nodes: 20
+    #   stopforumspam: 40
 
 # Health check endpoint
 health:
