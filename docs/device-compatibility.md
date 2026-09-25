@@ -39,6 +39,12 @@ Notes:
   only), and "50K/80K" (spec-derived defaults). The table above supersedes them.
 
 
+## IPv6
+
+The bouncer is **IPv4 only** — IPv6 decisions are not enforced. On dual-stack
+connections a banned host can simply reach you over IPv6. IPv6 support is
+tracked on the [roadmap](../ROADMAP.md).
+
 ## Detection Methods
 
 Detection is tried in order:
