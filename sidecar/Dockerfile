@@ -3,7 +3,7 @@
 # CrowdSec LAPI Sidecar Proxy
 #
 # Targets:
-#   runtime (default) - distroless static, nonroot (UID 65532), no shell
+#   runtime (default) - distroless static, no shell, runs as UID 1000
 #   debug             - same binary on distroless :debug-nonroot (busybox shell)
 #
 #   docker build -t crowdsec-sidecar .                     # runtime
@@ -42,7 +42,7 @@ LABEL org.opencontainers.image.title="crowdsec-sidecar (debug)" \
 COPY --from=builder /out/crowdsec-sidecar /usr/local/bin/crowdsec-sidecar
 COPY config.yaml.example /etc/crowdsec-sidecar/config.yaml.example
 
-USER 65532:65532
+USER 1000:1000
 EXPOSE 8084
 
 HEALTHCHECK --interval=30s --timeout=5s --start-period=10s --retries=3 \
@@ -65,7 +65,7 @@ LABEL org.opencontainers.image.title="crowdsec-sidecar" \
 COPY --from=builder /out/crowdsec-sidecar /usr/local/bin/crowdsec-sidecar
 COPY config.yaml.example /etc/crowdsec-sidecar/config.yaml.example
 
-USER 65532:65532
+USER 1000:1000
 EXPOSE 8084
 
 # No wget in distroless: the binary probes its own /health endpoint.
