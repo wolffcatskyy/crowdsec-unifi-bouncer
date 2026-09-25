@@ -309,6 +309,32 @@ The sidecar image is published to **GitHub Container Registry (GHCR)** on each r
 
 Multi-arch images are provided for `linux/amd64` and `linux/arm64`.
 
+| Tag | Base | Shell |
+|-----|------|-------|
+| `latest`, `vX.Y.Z` | `gcr.io/distroless/static-debian12:nonroot` | No |
+| `debug`, `vX.Y.Z-debug` | `gcr.io/distroless/static-debian12:debug-nonroot` | Yes (busybox, `/busybox/sh`) |
+
+Use the default tag in production. Switch to the `-debug` tag only when you need a shell
+inside the container, e.g. `docker exec -it crowdsec-sidecar sh`.
+
+### Verifying the image
+
+Release images are signed with [Cosign](https://docs.sigstore.dev/) keyless signing (GitHub OIDC)
+and carry a CycloneDX SBOM as a signed attestation. The SBOM is also attached to the GitHub
+release when one exists for the tag.
+
+```bash
+cosign verify ghcr.io/wolffcatskyy/crowdsec-sidecar:vX.Y.Z \
+  --certificate-identity-regexp '^https://github.com/wolffcatskyy/crowdsec-unifi-bouncer/.github/workflows/docker-publish.yml@' \
+  --certificate-oidc-issuer https://token.actions.githubusercontent.com
+
+# Download and check the SBOM attestation
+cosign verify-attestation --type cyclonedx ghcr.io/wolffcatskyy/crowdsec-sidecar:vX.Y.Z \
+  --certificate-identity-regexp '^https://github.com/wolffcatskyy/crowdsec-unifi-bouncer/.github/workflows/docker-publish.yml@' \
+  --certificate-oidc-issuer https://token.actions.githubusercontent.com \
+  | jq -r '.payload | @base64d | fromjson | .predicate' > sbom.cdx.json
+```
+
 Add the sidecar service to your existing CrowdSec compose file. The bouncer connects to the sidecar instead of LAPI directly.
 
 ### docker-compose.yaml
@@ -330,7 +356,7 @@ services:
     depends_on:
       - crowdsec
     healthcheck:
-      test: ["CMD", "wget", "-q", "--spider", "http://localhost:8084/health"]
+      test: ["CMD", "/usr/local/bin/crowdsec-sidecar", "-healthcheck", "-config", "/etc/crowdsec-sidecar/config.yaml"]
       interval: 30s
       timeout: 5s
       retries: 3
@@ -375,17 +401,27 @@ If you prefer to build the image yourself instead of pulling from a registry:
 git clone https://github.com/wolffcatskyy/crowdsec-unifi-bouncer.git
 cd crowdsec-unifi-bouncer/sidecar
 docker build -t crowdsec-sidecar:latest .
+# or, with a shell for troubleshooting:
+docker build --target debug -t crowdsec-sidecar:debug .
 ```
 
 ### Dockerfile
 
-The included multi-stage Dockerfile builds a minimal Alpine-based image:
+The included multi-stage Dockerfile builds a minimal distroless image:
 
-- Build stage: `golang:1.21-alpine`
-- Runtime stage: `alpine:3.19` with `ca-certificates` and `tzdata`
-- Runs as non-root user (`sidecar`, UID 1000)
-- Built-in healthcheck via `wget`
+- Build stage: `golang:1.25-alpine`, cross-compiled natively for each target arch (`-trimpath`, stripped)
+- Runtime stage (default): `gcr.io/distroless/static-debian12:nonroot` - no shell, no package manager;
+  includes CA certificates and tzdata (`TZ=` still works)
+- `debug` target: same binary on `distroless/static-debian12:debug-nonroot` (busybox shell)
+- Base images pinned by digest
+- Runs as non-root (UID/GID `65532:65532`)
+- Built-in healthcheck via `crowdsec-sidecar -healthcheck` (probes `listen_addr` + `health.path` from the config)
 - Exposes port 8084
+
+> **Upgrading from v2.5.x or earlier:** the image used to run as UID 1000 on Alpine and ship `wget`.
+> It now runs as UID 65532 with no shell. Make sure your mounted `config.yaml` is readable by
+> UID 65532 (e.g. `chmod 644`), and change any compose healthcheck that calls `wget` to
+> `["CMD", "/usr/local/bin/crowdsec-sidecar", "-healthcheck", "-config", "/etc/crowdsec-sidecar/config.yaml"]`.
 
 ---
 
