@@ -17,6 +17,8 @@
 #   BOOTSTRAP_REF     Git ref of THIS repo to install from (default: pinned
 #                     release tag below). Set to "main" for bleeding edge.
 #   BOUNCER_VERSION   Upstream cs-firewall-bouncer version (see install.sh).
+#   ONBOOT_AUTO_INSTALL Passed through to install.sh: 1 (default) installs a pinned,
+#                     SHA-256-verified on-boot-script-2.x if missing; 0 skips it.
 
 set -e
 

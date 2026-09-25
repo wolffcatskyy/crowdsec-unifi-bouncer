@@ -13,8 +13,8 @@
 #   boot-restore.sh           Re-link, enable, restore cron jobs (no start)
 #   boot-restore.sh --boot    Same, then start the bouncer if it isn't running
 #
-# install.sh runs it once and, if unifios-utilities on-boot-script-2.x is
-# installed (/data/on_boot.d exists), hooks it to run on every boot:
+# install.sh runs it once and hooks it to run on every boot through
+# on-boot-script-2.x (installed by install.sh if missing, pinned + verified):
 #   /data/on_boot.d/99-crowdsec-bouncer.sh
 
 BOUNCER_DIR="${BOUNCER_DIR:-/data/crowdsec-bouncer}"

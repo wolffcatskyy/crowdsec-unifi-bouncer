@@ -22,6 +22,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ### Upgrade note for v2.6
 - Existing bouncer configs are not rewritten by the installer. Upgrading from v2.5.x retains `disable_ipv6: true` and stays IPv4-only; `setup.sh` now warns. After the hardware test, opt in by setting `disable_ipv6: false` in `/data/crowdsec-bouncer/crowdsec-firewall-bouncer.yaml` and restarting the bouncer. New installs use the v2.6 template with IPv6 on.
 - IPv6 uses a small separate default: 2,000 ipset entries (`MAXELEM_V6_OVERRIDE` can change it) and 1,000 sidecar decisions (`max_decisions_v6` can change it). This adds to the IPv4 set. The prior UDR 40K figure measured total memory, not 40K per set; combined v4+v6 capacity still needs the v2.6 hardware run.
+### Changed
+- **on-boot-script-2.x is installed for you if missing** - `install.sh` (and so `bootstrap.sh`) now checks for unifi-utilities' on-boot-script-2.x (`udm-boot`). If it's present, nothing changes. If it's missing, the installer downloads `udm-boot.service` from a pinned unifi-common commit, verifies its SHA-256, installs and enables it, then adds the `/data/on_boot.d/99-crowdsec-bouncer.sh` hook. A checksum mismatch or failed download aborts before anything on the device is changed. The pin lives in a marked config block at the top of `install.sh`; nothing is vendored. Opt out with `ONBOOT_AUTO_INSTALL=0`.
+- Links updated: on-boot-script-2.x moved from unifios-utilities to [unifi-common](https://github.com/unifi-utilities/unifi-common).
 
 ## [2.5.4] - 2026-09-24
 

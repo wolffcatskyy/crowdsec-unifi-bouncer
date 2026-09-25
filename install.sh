@@ -15,8 +15,34 @@
 #                        BOUNCER_SHA256 for the tarball.
 #   BOUNCER_SHA256       Expected SHA-256 of the downloaded tarball (optional).
 #   ARCH                 Target architecture (default: auto-detected via dpkg).
+#   ONBOOT_AUTO_INSTALL  1 (default) installs the pinned on-boot-script-2.x if it is
+#                        missing; 0 skips that and only prints the manual steps.
 
 set -e
+
+# ============================================================================
+# ON-BOOT DEPENDENCY PIN - on-boot-script-2.x (udm-boot) from unifi-utilities
+# ----------------------------------------------------------------------------
+# The firmware-update hook needs unifi-utilities' on-boot-script-2.x (the
+# udm-boot systemd unit that runs /data/on_boot.d/* at boot). It is now
+# maintained in unifi-utilities/unifi-common (moved from unifios-utilities).
+#
+#   - Already installed?  Left alone. Nothing is downloaded or changed.
+#   - Missing?            udm-boot.service is downloaded from the commit
+#                         pinned below, checked against ONBOOT_SHA256, and
+#                         installed. A checksum mismatch aborts the install
+#                         before anything on the device is changed.
+#
+# Nothing from upstream is copied into this repo. To bump the pin: choose a
+# unifi-common commit, download udm-boot.service at that commit, run
+# sha256sum on it, and update both values below together.
+ONBOOT_REPO="unifi-utilities/unifi-common"
+ONBOOT_COMMIT="f3a02becc3051b59e50d39c218d34f88369762ad"
+ONBOOT_SHA256="19d900a0cb3e5a1f632a2d5a8373b3ac9d0542f89acb1eb451eb1c475fecf5a1"
+# ============================================================================
+ONBOOT_URL="https://raw.githubusercontent.com/${ONBOOT_REPO}/${ONBOOT_COMMIT}/udm-boot.service"
+ONBOOT_UNIT="/etc/systemd/system/udm-boot.service"
+ONBOOT_AUTO_INSTALL="${ONBOOT_AUTO_INSTALL:-1}"
 
 BOUNCER_DIR="/data/crowdsec-bouncer"
 ARCH="${ARCH:-$(dpkg --print-architecture 2>/dev/null || echo amd64)}"
@@ -57,6 +83,68 @@ fi
 if ! command -v ipset >/dev/null 2>&1 && [ "$DRY_RUN" -eq 0 ]; then
     echo "Error: ipset not found - is this a UniFi OS device?" >&2
     exit 1
+fi
+
+# Resolve the on-boot dependency before changing anything, so a failed
+# download or checksum mismatch leaves the device untouched.
+#   ONBOOT_STATE=present  on-boot-script-2.x already installed (left alone)
+#   ONBOOT_STATE=install  missing; verified unit staged in $ONBOOT_TMP
+#   ONBOOT_STATE=skip     not installing it (opted out or no systemd)
+onboot_installed() {
+    [ -f "$ONBOOT_UNIT" ] || systemctl cat udm-boot.service >/dev/null 2>&1
+}
+
+onboot_fetch() {
+    if command -v wget >/dev/null 2>&1; then
+        wget -q "$ONBOOT_URL" -O "$1"
+    elif command -v curl >/dev/null 2>&1; then
+        curl -fsSL "$ONBOOT_URL" -o "$1"
+    else
+        return 1
+    fi
+}
+
+ONBOOT_TMP=""
+if onboot_installed; then
+    ONBOOT_STATE="present"
+    echo "on-boot-script-2.x: already installed, leaving it as is."
+elif [ "$ONBOOT_AUTO_INSTALL" = "0" ]; then
+    ONBOOT_STATE="skip"
+    echo "on-boot-script-2.x: not installed (ONBOOT_AUTO_INSTALL=0, skipping)."
+elif ! command -v systemctl >/dev/null 2>&1; then
+    ONBOOT_STATE="skip"
+    echo "on-boot-script-2.x: not installed, and this device has no systemd (UniFi OS 4.x+ required). Skipping."
+else
+    ONBOOT_STATE="install"
+    echo "on-boot-script-2.x: not installed. Fetching pinned version (${ONBOOT_REPO}@${ONBOOT_COMMIT:0:7})..."
+    if ! command -v sha256sum >/dev/null 2>&1; then
+        echo "Error: sha256sum not found, so on-boot-script-2.x can't be verified." >&2
+        echo "Nothing was changed. Install it yourself (https://github.com/${ONBOOT_REPO})" >&2
+        echo "or re-run with ONBOOT_AUTO_INSTALL=0." >&2
+        exit 1
+    fi
+    ONBOOT_TMP="$(mktemp /tmp/udm-boot.service.XXXXXX)"
+    if ! onboot_fetch "$ONBOOT_TMP"; then
+        rm -f "$ONBOOT_TMP"
+        echo "Error: could not download on-boot-script-2.x from:" >&2
+        echo "  $ONBOOT_URL" >&2
+        echo "Nothing was changed. Check network access, or re-run with ONBOOT_AUTO_INSTALL=0." >&2
+        exit 1
+    fi
+    ONBOOT_ACTUAL="$(sha256sum "$ONBOOT_TMP" | awk '{print $1}')"
+    if [ "$ONBOOT_ACTUAL" != "$ONBOOT_SHA256" ]; then
+        rm -f "$ONBOOT_TMP"
+        echo "" >&2
+        echo "Error: CHECKSUM MISMATCH for on-boot-script-2.x (udm-boot.service)." >&2
+        echo "  URL:      $ONBOOT_URL" >&2
+        echo "  Expected: $ONBOOT_SHA256" >&2
+        echo "  Got:      $ONBOOT_ACTUAL" >&2
+        echo "The downloaded file does not match the pinned version, so it was discarded." >&2
+        echo "Install aborted. Nothing was changed on this device." >&2
+        echo "Please report this at https://github.com/wolffcatskyy/crowdsec-unifi-bouncer/issues" >&2
+        exit 1
+    fi
+    echo "on-boot-script-2.x: checksum verified."
 fi
 
 # Resolve the expected checksum for this download.
@@ -107,7 +195,13 @@ fi
 
 if [ "$DRY_RUN" -eq 1 ]; then
     echo "[dry-run] Would extract and install the binary to $BOUNCER_DIR/crowdsec-firewall-bouncer"
-    echo "[dry-run] Would install scripts, service files, cron jobs, and (if present) the on_boot.d hook"
+    echo "[dry-run] Would install scripts, service files, cron jobs, and the on_boot.d hook"
+    case "$ONBOOT_STATE" in
+        install) echo "[dry-run] Would install verified udm-boot.service (${ONBOOT_REPO}@${ONBOOT_COMMIT:0:7}) to $ONBOOT_UNIT and enable it"
+                 rm -f "$ONBOOT_TMP" ;;
+        present) echo "[dry-run] on-boot-script-2.x already installed, would leave it alone" ;;
+        *)       echo "[dry-run] Would skip on-boot-script-2.x (not installed)" ;;
+    esac
     rm -f crowdsec-firewall-bouncer.tgz
     echo "[dry-run] Done. Re-run without --dry-run to install."
     exit 0
@@ -150,10 +244,25 @@ bash "$BOUNCER_DIR/boot-restore.sh"
 echo "Service enabled on boot. Cron jobs installed."
 
 # Survive firmware updates: UniFi OS resets /etc and root's crontab on update.
-# With unifios-utilities on-boot-script-2.x installed, hook boot-restore.sh
-# into /data/on_boot.d so everything is put back on every boot.
+# on-boot-script-2.x (resolved near the top: left alone if present, installed
+# from the pinned commit if missing) runs /data/on_boot.d at every boot; hook
+# boot-restore.sh there so everything is put back.
 ON_BOOT_DIR="/data/on_boot.d"
 ON_BOOT_HOOK="$ON_BOOT_DIR/99-crowdsec-bouncer.sh"
+if [ "$ONBOOT_STATE" = "install" ]; then
+    # Install the verified unit. Enabled only (not started now): this installer
+    # already ran boot-restore.sh, and starting udm-boot would run every script
+    # in /data/on_boot.d immediately.
+    install -m 0644 "$ONBOOT_TMP" "$ONBOOT_UNIT"
+    rm -f "$ONBOOT_TMP"
+    mkdir -p "$ON_BOOT_DIR"
+    systemctl daemon-reload
+    systemctl enable udm-boot.service
+    echo "Installed on-boot-script-2.x (${ONBOOT_REPO}@${ONBOOT_COMMIT:0:7}): runs $ON_BOOT_DIR at every boot."
+elif [ "$ONBOOT_STATE" = "present" ]; then
+    # udm-boot creates this at boot; make sure the hook has somewhere to go now.
+    mkdir -p "$ON_BOOT_DIR"
+fi
 if [ -d "$ON_BOOT_DIR" ]; then
     cat > "$ON_BOOT_HOOK" <<HOOK
 #!/bin/bash
@@ -164,11 +273,11 @@ HOOK
     echo "Firmware-update hook installed: $ON_BOOT_HOOK"
 else
     echo ""
-    echo "WARNING: /data/on_boot.d not found. A firmware update will reset the"
+    echo "WARNING: on-boot-script-2.x is not installed. A firmware update will reset the"
     echo "systemd service and cron jobs, and the bouncer will stay stopped until"
     echo "you run: $BOUNCER_DIR/boot-restore.sh --boot"
-    echo "To make this automatic, install on-boot-script-2.x from"
-    echo "https://github.com/unifi-utilities/unifios-utilities and re-run install.sh."
+    echo "To make this automatic, re-run install.sh without ONBOOT_AUTO_INSTALL=0,"
+    echo "or install it from https://github.com/${ONBOOT_REPO} and re-run install.sh."
 fi
 
 echo ""
