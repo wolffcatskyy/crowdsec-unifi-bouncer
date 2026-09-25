@@ -91,7 +91,7 @@ jobs:
           cd sidecar
           go build -o /tmp/sidecar-bin ./cmd/sidecar
           cd ..
-          sed "s/__BOUNCER_KEY__/$(cat bouncer-key.txt)/" tests/ci-sidecar-config.yaml > /tmp/ci-config.yaml
+          python3 -c 'from pathlib import Path; config = Path("tests/ci-sidecar-config.yaml").read_text(); key = Path("bouncer-key.txt").read_text().strip(); Path("/tmp/ci-config.yaml").write_text(config.replace("__BOUNCER_KEY__", key))'
           /tmp/sidecar-bin -config /tmp/ci-config.yaml > sidecar.log 2>&1 &
           for i in $(seq 1 30); do
             if curl -sf http://127.0.0.1:9090/health > /dev/null; then echo "sidecar up"; break; fi
