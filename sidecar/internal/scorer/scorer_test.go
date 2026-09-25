@@ -605,3 +605,101 @@ func TestParsePrefixLen(t *testing.T) {
 		}
 	}
 }
+
+
+func feedScoringConfig() *config.ScoringConfig {
+	return &config.ScoringConfig{
+		Scenarios:          map[string]int{"default": 10},
+		Origins:            map[string]int{"CAPI": 10},
+		ScenarioMultiplier: 2.0,
+		DecisionTypes:      map[string]int{"ban": 5},
+		FeedScoring: config.FeedScoringConfig{
+			Enabled:        true,
+			MaxPenalty:     30,
+			Prefixes:       []string{"external/blocklist-import"},
+			LegacyPrefixes: []string{"external/blocklist"},
+		},
+	}
+}
+
+func TestScorer_FeedConfidence(t *testing.T) {
+	cfg := feedScoringConfig()
+	cfg.FeedScoring.Feeds = map[string]int{"greensnow": 20}
+	s := New(cfg)
+
+	// Base for every decision below: default 10*2 + ban 5 + /32 0 = 25
+	// (origin blocklist-import has no origin score).
+	tests := []struct {
+		scenario string
+		want     int
+		feed     string
+	}{
+		{"external/blocklist-import/spamhaus-drop/c95", 25 - 2, "spamhaus-drop"}, // (5*30+50)/100 = 2
+		{"external/blocklist-import/tor-exit-nodes/c40", 25 - 18, "tor-exit-nodes"},
+		{"external/blocklist-import/firehol-level1/c100", 25, "firehol-level1"},
+		{"external/blocklist-import/unknown-feed", 25, "unknown-feed"},    // no confidence: neutral
+		{"external/blocklist-import/greensnow/c90", 25 - 24, "greensnow"}, // config override wins
+		{"external/blocklist (Spamhaus DROP)", 25, "spamhaus-drop"},       // legacy, no override: neutral
+		{"external/blocklist (GreenSnow)", 25 - 24, "greensnow"},          // legacy + override
+		{"crowdsecurity/ssh-bf", 25, ""},                                  // not an import
+	}
+	for _, tt := range tests {
+		d := lapi.Decision{Origin: "blocklist-import", Type: "ban", Scope: "Ip", Value: "1.2.3.4", Scenario: tt.scenario}
+		if got := s.Score(&d); got != tt.want {
+			t.Errorf("Score(%q) = %d, want %d", tt.scenario, got, tt.want)
+		}
+		if d.Feed != tt.feed {
+			t.Errorf("Score(%q) feed = %q, want %q", tt.scenario, d.Feed, tt.feed)
+		}
+	}
+}
+
+func TestScorer_FeedConfidenceDisabled(t *testing.T) {
+	cfg := feedScoringConfig()
+	cfg.FeedScoring.Enabled = false
+	s := New(cfg)
+	d := lapi.Decision{Origin: "blocklist-import", Type: "ban", Scope: "Ip", Value: "1.2.3.4",
+		Scenario: "external/blocklist-import/tor-exit-nodes/c40"}
+	if got := s.Score(&d); got != 25 {
+		t.Errorf("disabled feed scoring changed score: got %d, want 25", got)
+	}
+	if d.Feed != "" {
+		t.Errorf("disabled feed scoring set feed %q", d.Feed)
+	}
+}
+
+// Feed confidence must only reorder imports among themselves and never lift
+// an import above a CAPI decision that previously outranked it.
+func TestScorer_FeedConfidenceRanksImports(t *testing.T) {
+	s := New(feedScoringConfig())
+	decisions := []lapi.Decision{
+		{ID: 1, Origin: "blocklist-import", Type: "ban", Scope: "Ip", Value: "10.0.0.1", Scenario: "external/blocklist-import/tor-exit-nodes/c40"},
+		{ID: 2, Origin: "blocklist-import", Type: "ban", Scope: "Ip", Value: "10.0.0.2", Scenario: "external/blocklist-import/spamhaus-drop/c95"},
+		{ID: 3, Origin: "CAPI", Type: "ban", Scope: "Ip", Value: "10.0.0.3", Scenario: "crowdsecurity/http-probing"},
+		{ID: 4, Origin: "blocklist-import", Type: "ban", Scope: "Ip", Value: "10.0.0.4", Scenario: "external/blocklist-import/stopforumspam/c55"},
+	}
+	kept, stats := s.ScoreAndTruncateWithStats(decisions, 2)
+
+	if kept[0].ID != 3 || kept[1].ID != 2 {
+		t.Fatalf("expected CAPI then spamhaus-drop kept, got IDs %d, %d", kept[0].ID, kept[1].ID)
+	}
+	if stats.FeedKept["spamhaus-drop"] != 1 {
+		t.Errorf("FeedKept[spamhaus-drop] = %d, want 1", stats.FeedKept["spamhaus-drop"])
+	}
+	if stats.FeedDropped["tor-exit-nodes"] != 1 || stats.FeedDropped["stopforumspam"] != 1 {
+		t.Errorf("FeedDropped = %v, want tor-exit-nodes and stopforumspam", stats.FeedDropped)
+	}
+	if _, ok := stats.FeedKept[""]; ok {
+		t.Error("non-import decision counted in FeedKept")
+	}
+}
+
+func TestFeedScoringPenalty(t *testing.T) {
+	f := config.FeedScoringConfig{MaxPenalty: 30}
+	cases := map[int]int{100: 0, 95: 2, 90: 3, 50: 15, 40: 18, 0: 30, -5: 30, 150: 0}
+	for conf, want := range cases {
+		if got := f.Penalty(conf); got != want {
+			t.Errorf("Penalty(%d) = %d, want %d", conf, got, want)
+		}
+	}
+}
