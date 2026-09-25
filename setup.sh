@@ -43,7 +43,7 @@ fi
 # Check for unsupported device
 if [ "${UNSUPPORTED_DEVICE:-false}" = "true" ]; then
     echo "[ERROR] Detected device model: ${DETECTED_NORMALIZED:-Unknown}"
-    echo "[ERROR] This device does not support firewall groups/ipsets"
+    echo "[ERROR] This device has no validated on-device install/persistence path (see discussion #48)"
     echo "[ERROR] crowdsec-unifi-bouncer cannot run on this device"
     exit 1
 fi
