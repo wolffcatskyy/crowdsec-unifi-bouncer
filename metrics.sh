@@ -39,6 +39,8 @@ decisions_dropped_total=0
 capacity_events_total=0
 last_capacity_event=0
 degraded=0
+placement_warnings=0
+placement_last_check=0
 STATEOF
     fi
     # Ensure new fields exist in old state files (upgrade path)
@@ -56,6 +58,12 @@ STATEOF
     fi
     if ! grep -q "^degraded=" "$STATE_FILE" 2>/dev/null; then
         echo "degraded=0" >> "$STATE_FILE"
+    fi
+    if ! grep -q "^placement_warnings=" "$STATE_FILE" 2>/dev/null; then
+        echo "placement_warnings=0" >> "$STATE_FILE"
+    fi
+    if ! grep -q "^placement_last_check=" "$STATE_FILE" 2>/dev/null; then
+        echo "placement_last_check=0" >> "$STATE_FILE"
     fi
 }
 
@@ -179,6 +187,14 @@ collect_metrics() {
     capacity_events_total=$(read_counter "capacity_events_total")
     last_capacity_event=$(read_counter "last_capacity_event")
     degraded=$(read_counter "degraded")
+    local placement_warnings
+    local placement_last_check
+    placement_warnings=$(read_counter "placement_warnings")
+    placement_last_check=$(read_counter "placement_last_check")
+    local placement_ok=1
+    if [ "${placement_warnings:-0}" -gt 0 ]; then
+        placement_ok=0
+    fi
 
     # --- Capacity metrics ---
     local capacity_percent=0
@@ -267,6 +283,18 @@ crowdsec_unifi_bouncer_capacity_percent $capacity_percent
 # TYPE crowdsec_unifi_bouncer_degraded gauge
 crowdsec_unifi_bouncer_degraded $degraded
 
+# HELP crowdsec_unifi_bouncer_rule_placement_ok Whether the DROP rules sit at the top of INPUT/FORWARD, ahead of UniFi's chains (1=ok, 0=drift; checked every 5 min by ensure-rules.sh)
+# TYPE crowdsec_unifi_bouncer_rule_placement_ok gauge
+crowdsec_unifi_bouncer_rule_placement_ok $placement_ok
+
+# HELP crowdsec_unifi_bouncer_rule_placement_warnings Number of placement warnings from the last check (0 = rules sit above UniFi chains)
+# TYPE crowdsec_unifi_bouncer_rule_placement_warnings gauge
+crowdsec_unifi_bouncer_rule_placement_warnings $placement_warnings
+
+# HELP crowdsec_unifi_bouncer_rule_placement_last_check_timestamp Unix timestamp of the last placement check (0 if never)
+# TYPE crowdsec_unifi_bouncer_rule_placement_last_check_timestamp gauge
+crowdsec_unifi_bouncer_rule_placement_last_check_timestamp $placement_last_check
+
 # HELP crowdsec_unifi_bouncer_scrape_timestamp Unix timestamp when these metrics were collected
 # TYPE crowdsec_unifi_bouncer_scrape_timestamp gauge
 crowdsec_unifi_bouncer_scrape_timestamp $timestamp
@@ -346,6 +374,16 @@ record_decisions_dropped() {
     set_counter "degraded" 1
 }
 
+record_placement() {
+    local warnings="${1:-0}"
+    case "$warnings" in
+        ''|*[!0-9]*) warnings=0 ;;
+    esac
+    init_state
+    set_counter "placement_warnings" "$warnings"
+    set_counter "placement_last_check" "$(date +%s)"
+}
+
 clear_degraded() {
     init_state
     set_counter "degraded" 0
@@ -375,6 +413,10 @@ case "${1:-}" in
     --clear-degraded)
         clear_degraded
         ;;
+    --record-placement)
+        # Usage: --record-placement <warning-count> (called by ensure-rules.sh every 5 min)
+        record_placement "${2:-0}"
+        ;;
     --help|-h)
         cat << HELPEOF
 CrowdSec UniFi Bouncer - Prometheus Metrics
@@ -391,6 +433,7 @@ Recording helpers (for use by ensure-rules.sh and ipset-capacity-monitor.sh):
   $0 --record-dropped [N]        Record N decisions dropped due to capacity (default: 1)
   $0 --record-decisions-dropped [N]  Alias for --record-dropped
   $0 --clear-degraded            Clear degraded status (after capacity freed)
+  $0 --record-placement <N>      Record N placement warnings from the latest --placement check
 
 Environment variables:
   METRICS_PORT    HTTP server port (default: 9101)
