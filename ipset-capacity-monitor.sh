@@ -29,6 +29,7 @@ export PATH="/usr/sbin:/usr/bin:/sbin:/bin:$PATH"
 # Configuration
 BOUNCER_DIR="${BOUNCER_DIR:-/data/crowdsec-bouncer}"
 IPSET_NAME="${IPSET_NAME:-crowdsec-blacklists}"
+IPSET_V6_NAME="${IPSET_V6_NAME:-crowdsec6-blacklists}"
 CAPACITY_LOG="${CAPACITY_LOG:-$BOUNCER_DIR/log/capacity.log}"
 STATE_FILE="${STATE_FILE:-$BOUNCER_DIR/metrics-state}"
 BOUNCER_LOG="$BOUNCER_DIR/log/crowdsec-firewall-bouncer.log"
@@ -242,6 +243,27 @@ check_capacity() {
         fi
     fi
 
+    # IPv6 set capacity (independent set, independent maxelem)
+    if ipset list "$IPSET_V6_NAME" -t >/dev/null 2>&1; then
+        local entries6 maxelem6
+        entries6=$(ipset list "$IPSET_V6_NAME" -t 2>/dev/null | awk '/^Number of entries:/{print $NF}')
+        maxelem6=$(ipset list "$IPSET_V6_NAME" -t 2>/dev/null | awk '/^Maxelem:/{print $NF}')
+        entries6="${entries6:-0}"
+        maxelem6="${maxelem6:-0}"
+        if [ "$maxelem6" -gt 0 ]; then
+            local fill6=$((entries6 * 100 / maxelem6))
+            if [ "$fill6" -ge 95 ]; then
+                echo "$timestamp WARNING: IPv6 ipset CRITICAL - ${fill6}% full ($entries6/$maxelem6)" >> "$CAPACITY_LOG"
+                logger -t crowdsec-bouncer "CRITICAL: IPv6 ipset at ${fill6}% capacity - decisions will be dropped!"
+                return 2
+            elif [ "$fill6" -ge 90 ]; then
+                echo "$timestamp WARNING: IPv6 ipset HIGH - ${fill6}% full ($entries6/$maxelem6)" >> "$CAPACITY_LOG"
+                logger -t crowdsec-bouncer "WARNING: IPv6 ipset at ${fill6}% capacity - approaching limit"
+                return 1
+            fi
+        fi
+    fi
+
     return 0
 }
 
@@ -256,19 +278,22 @@ check_capacity() {
 #
 # IPTABLES / NFT / IPSET_CMD can be overridden (used for testing).
 IPTABLES="${IPTABLES:-iptables}"
+IP6TABLES="${IP6TABLES:-ip6tables}"
 NFT="${NFT:-nft}"
 IPSET_CMD="${IPSET_CMD:-ipset}"
 UNIFI_TARGET_RE='^(UBIOS_[A-Za-z0-9_]+|ALIEN|TOR|IPS|LO_IPS)$'
 
 # Print placement of the crowdsec DROP rule within one built-in chain.
+# Args: <iptables-cmd> <chain> <ipset-name>. Family-aware: pass ip6tables and
+# the inet6 set for the IPv6 check.
 # Returns the number of warnings found (0 = OK).
 check_chain_placement() {
-    local chain="$1"
+    local ipt_cmd="$1" chain="$2" set_name="$3"
     local rules line target
     local idx=0 cs_pos=0 cs_count=0
     local unifi_pos=0 unifi_target="" accept_pos=0
 
-    rules=$("$IPTABLES" -S "$chain" 2>/dev/null || true)
+    rules=$("$ipt_cmd" -S "$chain" 2>/dev/null || true)
     while IFS= read -r line; do
         case "$line" in
             "-A $chain "*) ;;
@@ -276,7 +301,7 @@ check_chain_placement() {
         esac
         idx=$((idx + 1))
         target=$(sed -n 's/.* -[jg] \([^ ]*\).*/\1/p' <<< "$line")
-        if [[ "$line" == *"--match-set $IPSET_NAME src"* ]] && [ "$target" = "DROP" ]; then
+        if [[ "$line" == *"--match-set $set_name src"* ]] && [ "$target" = "DROP" ]; then
             cs_count=$((cs_count + 1))
             [ "$cs_pos" -eq 0 ] && cs_pos=$idx
             continue
@@ -313,9 +338,9 @@ check_chain_placement() {
         warn=$((warn + 1))
     fi
     if [ "$misplaced" -eq 1 ]; then
-        echo "         To move it back to the top:"
-        echo "           iptables -D $chain -m set --match-set $IPSET_NAME src -j DROP"
-        echo "           iptables -I $chain 1 -m set --match-set $IPSET_NAME src -j DROP"
+        echo "         ensure-rules.sh moves it back within 5 min. By hand:"
+        echo "           $ipt_cmd -D $chain -m set --match-set $set_name src -j DROP"
+        echo "           $ipt_cmd -I $chain 1 -m set --match-set $set_name src -j DROP"
     elif [ "$warn" -eq 0 ]; then
         echo "  [OK]   $chain: crowdsec DROP is rule $cs_pos of $idx, ahead of $unifi_target (rule $unifi_pos)"
     fi
@@ -375,9 +400,23 @@ check_rule_placement() {
 
     for chain in INPUT FORWARD; do
         rc=0
-        check_chain_placement "$chain" || rc=$?
+        check_chain_placement "$IPTABLES" "$chain" "$IPSET_NAME" || rc=$?
         warnings=$((warnings + rc))
     done
+
+    # IPv6: only when the v6 set exists (setup.sh creates it when the bouncer
+    # config has disable_ipv6: false). Skip silently otherwise.
+    if command -v "$IP6TABLES" >/dev/null 2>&1 \
+        && command -v "$IPSET_CMD" >/dev/null 2>&1 \
+        && "$IPSET_CMD" list "$IPSET_V6_NAME" >/dev/null 2>&1; then
+        echo ""
+        echo "  IPv6 ($IP6TABLES, set $IPSET_V6_NAME):"
+        for chain in INPUT FORWARD; do
+            rc=0
+            check_chain_placement "$IP6TABLES" "$chain" "$IPSET_V6_NAME" || rc=$?
+            warnings=$((warnings + rc))
+        done
+    fi
 
     echo ""
     if [ "$warnings" -gt 0 ]; then
