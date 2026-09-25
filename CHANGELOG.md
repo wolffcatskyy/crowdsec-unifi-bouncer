@@ -16,6 +16,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 - **Placement drift monitoring on the 5-minute cron.** `ensure-rules.sh` now runs the `--placement` check every cycle and records the warning count, so drift is caught even when nobody runs the check by hand. New metrics-endpoint gauges: `crowdsec_unifi_bouncer_rule_placement_ok` (1=ok, 0=drift), `crowdsec_unifi_bouncer_rule_placement_warnings`, and `crowdsec_unifi_bouncer_rule_placement_last_check_timestamp`.
+- **IPv6 enforcement (beta, pending hardware verification).** With `disable_ipv6: false` (now the default in the config template) the bouncer fills a separate inet6 ipset (`crowdsec6-blacklists`, matching the upstream bouncer's `blacklists_ipv6`), and `setup.sh`/`ensure-rules.sh` mirror the DROP rules into `ip6tables` at position 1 of `INPUT`/`FORWARD`. `log-rules.sh` covers the v6 WAN chains, `--placement` checks the v6 chains when the v6 set exists, and the metrics endpoint gains `crowdsec_unifi_bouncer_blocked_ips6_total`, `crowdsec_unifi_bouncer_ipset6_size`, `crowdsec_unifi_bouncer_ipset6_fill_ratio`, and v6 rule-presence gauges. On v2.5.x and earlier the bouncer is IPv4 only: IPv6 decisions are not enforced.
+- **Separate IPv6 capacity limits.** The inet6 set has its own maxelem (`MAXELEM_V6_OVERRIDE`, defaults to the device's v4 limit), and the sidecar caps v6 decisions independently with `max_decisions_v6` (defaults to `max_decisions`) - a v6 flood can't evict v4 decisions and vice versa. New sidecar metric `crowdsec_sidecar_max_decisions_v6`.
 
 ## [2.5.4] - 2026-09-24
 
