@@ -37,6 +37,7 @@ The one-line bootstrap now defers to `install.sh` to resolve the latest upstream
 - New device (12GB RAM) -- add to detect-device.sh when available
 
 ### nftables Migration
+- Research notes: [docs/zone-placement.md](docs/zone-placement.md) (as of Sept 2026 no public evidence UniFi OS 5 uses native nftables)
 - Modern UniFi OS versions may support nftables
 - Prepare migration path when iptables deprecated
 - Maintain backwards compatibility
