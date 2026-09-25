@@ -5,6 +5,12 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [Unreleased]
+
+### Changed
+- **on-boot-script-2.x is installed for you if missing** - `install.sh` (and so `bootstrap.sh`) now checks for unifi-utilities' on-boot-script-2.x (`udm-boot`). If it's present, nothing changes. If it's missing, the installer downloads `udm-boot.service` from a pinned unifi-common commit, verifies its SHA-256, installs and enables it, then adds the `/data/on_boot.d/99-crowdsec-bouncer.sh` hook. A checksum mismatch or failed download aborts before anything on the device is changed. The pin lives in a marked config block at the top of `install.sh`; nothing is vendored. Opt out with `ONBOOT_AUTO_INSTALL=0`.
+- Links updated: on-boot-script-2.x moved from unifios-utilities to [unifi-common](https://github.com/unifi-utilities/unifi-common).
+
 ## [2.5.4] - 2026-09-24
 
 ### Fixed
