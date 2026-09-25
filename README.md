@@ -36,7 +36,7 @@ Drop-in install of the official [CrowdSec firewall bouncer](https://github.com/c
 - **AbuseIPDB reporting** (v2.4.0) — automatically reports locally-banned IPs to AbuseIPDB, contributing to community threat intelligence
 - **LOG rules for detection** (v2.5.0) — iptables LOG rules make dropped packets visible to CrowdSec, enabling port scan detection and AbuseIPDB reporting
 - **Lightweight** — 15 MB RAM for the bouncer, 8 MB for the sidecar
-- **IPv4 + IPv6** (v2.6, beta) — separate inet6 ipset and `ip6tables` rules mirror the v4 path, with independent capacity limits. On v2.5.x and earlier the bouncer is IPv4 only: IPv6 decisions are not enforced
+- **IPv4 + IPv6** (v2.6, beta) — separate inet6 ipset and `ip6tables` rules mirror the v4 path, with independent capacity limits. Existing configs retain `disable_ipv6: true` on upgrade and must be changed explicitly to enable IPv6; `setup.sh` warns while it is off. On v2.5.x and earlier the bouncer is IPv4 only: IPv6 decisions are not enforced
 
 ## Table of Contents
 
