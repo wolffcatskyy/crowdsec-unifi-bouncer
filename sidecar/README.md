@@ -70,7 +70,7 @@ total = (scenario_base * scenario_multiplier)
 | 5 | **Freshness bonus** | 0-15 pts | Created < 1 hour ago: 15 pts. Created < 24 hours ago: 10 pts. Created < 7 days ago: 5 pts. Older than 7 days: 0 pts. Prioritizes active, ongoing attacks. |
 | 6 | **CIDR bonus** | 0-20 pts | /0-/16 (large ranges): 20 pts. /17-/24 (medium ranges): 10 pts. /25-/32 (single IPs): 0 pts. Broader ranges block more addresses per ipset entry. |
 | 7 | **Recidivism bonus** | 15 pts per extra decision | If an IP has N decisions, each gets +15*(N-1). An IP with 3 decisions gets +30 per decision. Repeat offenders are promoted to survive truncation. |
-| 8 | **Feed confidence** | 0 to -30 pts | Only for [crowdsec-blocklist-import](https://github.com/wolffcatskyy/crowdsec-blocklist-import) decisions. The source feed and its confidence (0-100) are read from the scenario name, e.g. `external/blocklist-import/spamhaus-drop/c95`. Penalty = (100 - confidence) * 30 / 100: Spamhaus DROP at 95 loses 2 pts, Tor exit nodes at 40 lose 18. Penalty-only, so imports get ranked among themselves and never climb above CAPI, local or manual decisions. Unknown confidence = no change. See [Feed confidence scoring](#feed-confidence-scoring). |
+| 8 | **Feed confidence** | 0 to -30 pts | Only for [crowdsec-blocklist-import](https://github.com/wolffcatskyy/crowdsec-blocklist-import) decisions. The source feed and its confidence (0-100) are read from the scenario name, e.g. `external/blocklist-import/spamhaus-drop/c95`. Penalty = (100 - confidence) * 30 / 100: Spamhaus DROP at 95 loses 2 pts, Tor exit nodes at 25 lose 23. Penalty-only, so imports get ranked among themselves and never climb above CAPI, local or manual decisions. Unknown confidence = no change. See [Feed confidence scoring](#feed-confidence-scoring). |
 
 ### Feed confidence scoring
 
@@ -81,8 +81,10 @@ Without feed data every bulk import scores the same, so which imported IPs survi
 | Format | Example | Feed | Confidence |
 |--------|---------|------|------------|
 | Structured | `external/blocklist-import/spamhaus-drop/c95` | `spamhaus-drop` | 95 (from name) |
-| Structured, no confidence | `external/blocklist-import/all-sources` | `all-sources` | none |
+| Structured, no confidence | `external/blocklist-import/<feed>` | `<feed>` | none |
 | Legacy (importer default) | `external/blocklist (Spamhaus DROP)` | `spamhaus-drop` | none |
+
+(blocklist-import v3.9+ consolidates alerts per feed in structured mode, so the mixed `all-sources` scenario no longer appears there; it only exists in the legacy format.)
 
 Grammar: `<prefix>/<feed-slug>[/c<0-100>]`, where the slug is lowercase letters and digits joined by single hyphens. Anything that doesn't match is treated as a normal scenario and scored exactly as before.
 
@@ -92,6 +94,8 @@ Grammar: `<prefix>/<feed-slug>[/c<0-100>]`, where the slug is lowercase letters 
 3. Nothing - the decision is left untouched
 
 So existing setups see no change until the importer switches to structured names or you add overrides.
+
+The importer's built-in confidence numbers are judgment calls, not measurements - tune them either at the importer (`FEED_CONFIDENCE`) or here (`feeds`, which wins).
 
 ```yaml
 scoring:
