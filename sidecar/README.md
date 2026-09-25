@@ -111,7 +111,7 @@ cp config.yaml.example config.yaml
 | `upstream_lapi_url` | string | *required* | URL of your CrowdSec LAPI (e.g., `http://crowdsec:8080`). |
 | `upstream_lapi_key` | string | *required* | Bouncer API key. Use the same key your bouncer was registered with. |
 | `max_decisions` | int | `15000` | Maximum decisions returned to the bouncer. Set below your ipset `maxelem` -- leave ~2,000 headroom for manual entries and churn. Example: device maxelem=20,000, set max_decisions=18,000. |
-| `max_decisions_v6` | int | `0` (= `max_decisions`) | Maximum IPv6 decisions returned to the bouncer (v2.6+). The device keeps a separate inet6 ipset with its own maxelem, so the v6 cap is independent - a v6 flood can't evict v4 decisions. Set below your v6 maxelem (`MAXELEM_V6_OVERRIDE`). |
+| `max_decisions_v6` | int | `0` (= 1,000) | Maximum IPv6 decisions returned to the bouncer (v2.6+). The device keeps a separate inet6 ipset with its own maxelem, so the v6 cap is independent - a v6 flood can't evict v4 decisions. Set below your v6 maxelem (`MAXELEM_V6_OVERRIDE`). |
 | `cache_ttl` | duration | `60s` | How long to cache upstream LAPI responses. Reduces load on LAPI while keeping data fresh enough. |
 | `upstream_timeout` | duration | `120s` | Timeout for upstream LAPI requests. Large decision sets (120K+) can take time, especially on `startup=true` stream queries. |
 | `log_level` | string | `info` | Log verbosity: `debug`, `info`, `warn`, `error`. JSON-structured output to stdout. |
@@ -469,7 +469,7 @@ All metrics are exposed at the `/metrics` endpoint in Prometheus text format.
 | `crowdsec_sidecar_cached_decisions` | gauge | Current number of decisions held in the response cache. |
 | `crowdsec_sidecar_upstream_latency_seconds` | gauge | Latency of the most recent upstream LAPI request, in seconds. |
 | `crowdsec_sidecar_max_decisions` | gauge | Configured `max_decisions` limit (static, from config). |
-| `crowdsec_sidecar_max_decisions_v6` | gauge | Configured IPv6 decisions limit (effective value after fallback to `max_decisions`). |
+| `crowdsec_sidecar_max_decisions_v6` | gauge | Configured IPv6 decisions limit (effective value, 1,000 by default). |
 | `crowdsec_sidecar_decisions_total` | gauge | Total number of decisions received from upstream LAPI (before filtering). |
 | `crowdsec_sidecar_decisions_dropped` | gauge | Number of decisions dropped due to the `max_decisions` limit. |
 | `crowdsec_sidecar_uptime_seconds` | gauge | Time in seconds since the sidecar process started. |
