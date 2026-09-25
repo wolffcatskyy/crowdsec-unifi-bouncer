@@ -26,7 +26,7 @@ api_key: YOUR_BOUNCER_API_KEY
 | `update_frequency` | `10s` | How often to poll for new decisions |
 | `api_url` | -- | LAPI address (port 8080) or sidecar address (port 8084) |
 | `api_key` | -- | Bouncer API key from `cscli bouncers add` |
-| `disable_ipv6` | `true` | UniFi has issues with IPv6 firewall rules |
+| `disable_ipv6` | `false` (v2.6+ template; `true` in older configs) | When `false`, the bouncer fills the `crowdsec6-blacklists` inet6 set and setup.sh mirrors DROP rules into `ip6tables` |
 | `deny_action` | `DROP` | `DROP` (silent) or `REJECT` (sends reset) |
 
 ## Starting the Bouncer
