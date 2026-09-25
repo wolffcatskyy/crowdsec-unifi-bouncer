@@ -39,6 +39,22 @@ Notes:
   only), and "50K/80K" (spec-derived defaults). The table above supersedes them.
 
 
+## IPv6
+
+**IPv6 is enforced as of v2.6** (beta: not yet verified on real hardware). With
+`disable_ipv6: false` in the bouncer config (the default in the v2.6+ template)
+the bouncer fills a separate inet6 ipset (`crowdsec6-blacklists`) and
+`setup.sh`/`ensure-rules.sh` mirror the DROP rules into `ip6tables` at position
+1. **On v2.5.x and earlier the bouncer is IPv4 only** — IPv6 decisions are not
+enforced, and on dual-stack connections a banned host can simply reach you over
+IPv6.
+
+The v4 and v6 sets have **separate capacities**: each set has its own
+`maxelem`, and the sidecar caps them independently (`max_decisions` /
+`max_decisions_v6`). Without overrides the v6 set uses the same limit as the
+v4 set for your device; set `MAXELEM_V6_OVERRIDE` (and the sidecar's
+`max_decisions_v6` to match, minus 2,000 headroom) to size it separately.
+
 ## UniFi OS 5.x
 
 **OS 5.x: iptables confirmed.** A community capture from a UCG Fiber on UniFi OS
@@ -81,13 +97,14 @@ Detection is tried in order:
 | UXG-Lite | **Unsupported** | -- | -- | -- |
 | Unknown device | -- | 10,000 | -- | 8,000 |
 
-"Sidecar Cap" = recommended `max_decisions` for the sidecar proxy, leaving 2,000 entries of headroom for manual bans.
+"Sidecar Cap" = recommended `max_decisions` for the sidecar proxy, leaving 2,000 entries of headroom for manual bans. IPv6 (v2.6+): the inet6 set gets the same default as the v4 set per device, and the sidecar caps it separately with `max_decisions_v6` (defaults to `max_decisions`). The two limits are independent - each set has its own maxelem, so a flood in one family can't evict the other.
 
 ## Environment Variables
 
 | Variable | Description | Default |
 |----------|-------------|---------|
 | `MAXELEM_OVERRIDE` | Manual override for ipset maxelem. Bypasses auto-detection. Logs a warning if it exceeds the recommended limit for your device. | Auto-detected |
+| `MAXELEM_V6_OVERRIDE` | Manual override for the IPv6 ipset (inet6) maxelem. The v6 set is a separate set with its own maxelem; without an override it uses the same limit as the v4 set. | Same as v4 |
 | `MEMORY_OPTIMIZED` | Set to `true` to use reduced limits for devices running BGP, ad-blocking, content filtering, or multiple UniFi applications. | `false` |
 
 ## Usage Scenarios
