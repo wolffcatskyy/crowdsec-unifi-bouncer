@@ -29,7 +29,7 @@ Drop-in install of the official [CrowdSec firewall bouncer](https://github.com/c
 - **One-line install** — `curl | bash` bootstrap onto any supported UniFi device
 - **Persistence** — survives reboots and controller reprovisioning; recovers after UniFi OS updates via an on_boot.d hook (see [Firmware updates](#firmware-updates))
 - **Auto-detection** — identifies your device model and applies safe ipset limits automatically
-- **Sidecar proxy** — scores 120K+ decisions across 7 factors, fits the highest-priority threats into your device's capacity
+- **Sidecar proxy** — scores 120K+ decisions across 8 factors, fits the highest-priority threats into your device's capacity
 - **Stream-aware capping** (v2.3.0) — prevents ipset overflow on high-churn CAPI streams with configurable eviction
 - **Prometheus metrics** — monitor ipset fill ratio, dropped decisions, and sidecar effectiveness
 - **Grafana dashboard** — included, ready to import
@@ -128,7 +128,7 @@ See the [full configuration reference](docs/configuration.md) for all settings, 
 
 ## Architecture
 
-Persistence scripts keep the bouncer running through reboots and controller reprovisioning, and restore it after firmware updates. An optional sidecar proxy scores 120K+ decisions across 7 factors so your device's limited ipset always holds the highest-priority threats.
+Persistence scripts keep the bouncer running through reboots and controller reprovisioning, and restore it after firmware updates. An optional sidecar proxy scores 120K+ decisions across 8 factors so your device's limited ipset always holds the highest-priority threats.
 
 See [docs/architecture.md](docs/architecture.md) for the full diagram and persistence mechanism details.
 
@@ -158,7 +158,7 @@ See [docs/device-compatibility.md](docs/device-compatibility.md) for the full de
 
 ## Sidecar Proxy (Optional but Recommended)
 
-The sidecar scores all LAPI decisions across 7 factors (scenario severity, origin, freshness, recidivism, and more) and returns only the top N that fit your device. Your local detections and manual bans always survive — only low-signal bulk imports are dropped.
+The sidecar scores all LAPI decisions across 8 factors (scenario severity, origin, freshness, recidivism, blocklist feed confidence, and more) and returns only the top N that fit your device. Your local detections and manual bans always survive — only low-signal bulk imports are dropped.
 
 Deploy it if your LAPI has more than ~15K-30K decisions, or if you subscribe to community blocklists. See [docs/sidecar.md](docs/sidecar.md) for setup and scoring details.
 
