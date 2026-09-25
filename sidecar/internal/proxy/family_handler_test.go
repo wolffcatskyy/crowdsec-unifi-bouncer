@@ -50,13 +50,13 @@ func TestScoreAndCapPerFamily(t *testing.T) {
 	}
 }
 
-// Without max_decisions_v6 set, the v6 cap falls back to max_decisions.
-func TestScoreAndCapPerFamilyV6Fallback(t *testing.T) {
+// Without max_decisions_v6 set, the v6 cap uses the small default.
+func TestScoreAndCapPerFamilyV6Default(t *testing.T) {
 	cfg := testConfig("http://127.0.0.1:1")
 	cfg.MaxDecisions = 2
 	logger := slog.New(slog.NewTextHandler(os.Stderr, &slog.HandlerOptions{Level: slog.LevelError}))
 	h := New(cfg, logger)
-	if h.cfg.EffectiveMaxDecisionsV6() != 2 {
-		t.Fatalf("EffectiveMaxDecisionsV6 = %d, want fallback 2", h.cfg.EffectiveMaxDecisionsV6())
+	if h.cfg.EffectiveMaxDecisionsV6() != 1000 {
+		t.Fatalf("EffectiveMaxDecisionsV6 = %d, want default 1000", h.cfg.EffectiveMaxDecisionsV6())
 	}
 }
