@@ -5,6 +5,12 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [Unreleased]
+
+### Added
+- **Feed confidence scoring (8th scoring factor)** - The sidecar now ranks crowdsec-blocklist-import decisions by source-feed quality instead of treating all bulk imports the same. Feed and confidence are parsed from the scenario name (`external/blocklist-import/<feed>/c<0-100>`, written by blocklist-import with `SCENARIO_FORMAT=structured`). Legacy names (`external/blocklist (Feed Name)`) are recognized too and can get confidence from the new `scoring.feed_scoring.feeds` overrides. Penalty-only (default up to -30 pts), so imports never climb above CAPI, local or manual decisions; decisions with unknown confidence score exactly as before.
+- `crowdsec_sidecar_feed_kept{feed}` and `crowdsec_sidecar_feed_dropped{feed}` metrics.
+
 ## [2.5.4] - 2026-09-24
 
 ### Fixed
