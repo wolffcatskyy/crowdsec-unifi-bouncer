@@ -27,6 +27,16 @@ type Config struct {
 	Metrics         MetricsConfig       `yaml:"metrics"`
 	Effectiveness   EffectivenessConfig `yaml:"effectiveness"`
 	AbuseIPDB       abuseipdb.Config    `yaml:"abuseipdb"`
+	UpstreamTLS     UpstreamTLSConfig   `yaml:"upstream_tls"`
+}
+
+// UpstreamTLSConfig configures TLS for outgoing calls to the upstream LAPI.
+// All fields are optional; with none set, the system trust store is used.
+type UpstreamTLSConfig struct {
+	CACertPath         string `yaml:"ca_cert_path"`         // PEM CA bundle to trust
+	ClientCertPath     string `yaml:"client_cert_path"`     // PEM client cert (mTLS)
+	ClientKeyPath      string `yaml:"client_key_path"`      // PEM client key (mTLS)
+	InsecureSkipVerify bool   `yaml:"insecure_skip_verify"` // disables verification; testing only
 }
 
 // FreshnessBonus awards extra points for recently created decisions.
@@ -44,14 +54,14 @@ type CIDRBonus struct {
 
 // ScoringConfig contains all scoring-related settings.
 type ScoringConfig struct {
-	Scenarios          map[string]int   `yaml:"scenarios"`
-	Origins            map[string]int   `yaml:"origins"`
-	TTLScoring         TTLScoringConfig `yaml:"ttl_scoring"`
-	DecisionTypes      map[string]int   `yaml:"decision_types"`
-	ScenarioMultiplier float64          `yaml:"scenario_multiplier"`
-	FreshnessBonuses   []FreshnessBonus `yaml:"freshness_bonuses"`
-	CIDRBonuses        []CIDRBonus      `yaml:"cidr_bonuses"`
-	RecidivismBonus    int              `yaml:"recidivism_bonus"`
+	Scenarios          map[string]int    `yaml:"scenarios"`
+	Origins            map[string]int    `yaml:"origins"`
+	TTLScoring         TTLScoringConfig  `yaml:"ttl_scoring"`
+	DecisionTypes      map[string]int    `yaml:"decision_types"`
+	ScenarioMultiplier float64           `yaml:"scenario_multiplier"`
+	FreshnessBonuses   []FreshnessBonus  `yaml:"freshness_bonuses"`
+	CIDRBonuses        []CIDRBonus       `yaml:"cidr_bonuses"`
+	RecidivismBonus    int               `yaml:"recidivism_bonus"`
 	FeedScoring        FeedScoringConfig `yaml:"feed_scoring"`
 
 	// Compiled regex patterns (not from YAML)
@@ -204,6 +214,20 @@ func Load(path string) (*Config, error) {
 		cfg.EvictionMode = "cap"
 	}
 
+	// Upstream LAPI TLS environment variable overrides
+	if v := os.Getenv("UPSTREAM_LAPI_CA_CERT"); v != "" {
+		cfg.UpstreamTLS.CACertPath = v
+	}
+	if v := os.Getenv("UPSTREAM_LAPI_CLIENT_CERT"); v != "" {
+		cfg.UpstreamTLS.ClientCertPath = v
+	}
+	if v := os.Getenv("UPSTREAM_LAPI_CLIENT_KEY"); v != "" {
+		cfg.UpstreamTLS.ClientKeyPath = v
+	}
+	if v := os.Getenv("UPSTREAM_LAPI_TLS_INSECURE_SKIP_VERIFY"); v != "" {
+		cfg.UpstreamTLS.InsecureSkipVerify = v == "true" || v == "1"
+	}
+
 	// AbuseIPDB environment variable overrides
 	if envKey := os.Getenv("ABUSEIPDB_API_KEY"); envKey != "" {
 		cfg.AbuseIPDB.APIKey = envKey
@@ -252,6 +276,9 @@ func (c *Config) Validate() error {
 	}
 	if c.UpstreamLAPIKey == "" {
 		return fmt.Errorf("upstream_lapi_key is required")
+	}
+	if (c.UpstreamTLS.ClientCertPath == "") != (c.UpstreamTLS.ClientKeyPath == "") {
+		return fmt.Errorf("upstream_tls.client_cert_path and client_key_path must be set together")
 	}
 	if c.MaxDecisions <= 0 {
 		return fmt.Errorf("max_decisions must be positive")
