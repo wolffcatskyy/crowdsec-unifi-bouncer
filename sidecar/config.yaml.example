@@ -12,6 +12,15 @@ upstream_lapi_url: "http://127.0.0.1:8080"
 # Bouncer API key (same key you'd use with the bouncer)
 upstream_lapi_key: "YOUR_BOUNCER_KEY"
 
+# Optional: TLS for an https:// upstream LAPI. Leave unset to use the system
+# trust store. Env overrides: UPSTREAM_LAPI_CA_CERT, UPSTREAM_LAPI_CLIENT_CERT,
+# UPSTREAM_LAPI_CLIENT_KEY, UPSTREAM_LAPI_TLS_INSECURE_SKIP_VERIFY.
+# upstream_tls:
+#   ca_cert_path: "/certs/ca.pem"          # CA that signed the LAPI cert
+#   client_cert_path: "/certs/client.pem"  # mTLS only; set with client_key_path
+#   client_key_path: "/certs/client-key.pem"
+#   insecure_skip_verify: false            # testing only, disables verification
+
 # Maximum number of IPv4 decisions to return to bouncer
 # Set below your ipset maxelem to leave headroom for manual entries
 # Example: device maxelem=20000, set max_decisions=18000
