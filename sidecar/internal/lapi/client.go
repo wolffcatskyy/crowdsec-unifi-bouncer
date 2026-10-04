@@ -3,11 +3,14 @@ package lapi
 
 import (
 	"context"
+	"crypto/tls"
+	"crypto/x509"
 	"encoding/json"
 	"fmt"
 	"io"
 	"net/http"
 	"net/url"
+	"os"
 	"time"
 )
 
@@ -43,18 +46,73 @@ type Client struct {
 	httpClient *http.Client
 }
 
+// TLSOptions configures TLS for outgoing LAPI calls. The zero value uses the
+// system trust store with no client certificate.
+type TLSOptions struct {
+	CACertPath         string
+	ClientCertPath     string
+	ClientKeyPath      string
+	InsecureSkipVerify bool
+}
+
+// Enabled reports whether any TLS option is set.
+func (o TLSOptions) Enabled() bool {
+	return o.CACertPath != "" || o.ClientCertPath != "" || o.ClientKeyPath != "" || o.InsecureSkipVerify
+}
+
+// BuildTLSConfig builds a *tls.Config from the options. It returns nil when
+// no option is set so callers keep Go's default behaviour.
+func BuildTLSConfig(o TLSOptions) (*tls.Config, error) {
+	if !o.Enabled() {
+		return nil, nil
+	}
+	cfg := &tls.Config{MinVersion: tls.VersionTLS12, InsecureSkipVerify: o.InsecureSkipVerify} //nolint:gosec // opt-in, documented as testing only
+	if o.CACertPath != "" {
+		pem, err := os.ReadFile(o.CACertPath)
+		if err != nil {
+			return nil, fmt.Errorf("reading LAPI CA cert: %w", err)
+		}
+		pool, err := x509.SystemCertPool()
+		if err != nil || pool == nil {
+			pool = x509.NewCertPool()
+		}
+		if !pool.AppendCertsFromPEM(pem) {
+			return nil, fmt.Errorf("no valid PEM certificates in %s", o.CACertPath)
+		}
+		cfg.RootCAs = pool
+	}
+	if (o.ClientCertPath == "") != (o.ClientKeyPath == "") {
+		return nil, fmt.Errorf("client cert and key must be set together")
+	}
+	if o.ClientCertPath != "" {
+		cert, err := tls.LoadX509KeyPair(o.ClientCertPath, o.ClientKeyPath)
+		if err != nil {
+			return nil, fmt.Errorf("loading LAPI client cert: %w", err)
+		}
+		cfg.Certificates = []tls.Certificate{cert}
+	}
+	return cfg, nil
+}
+
 // NewClient creates a new LAPI client with the specified timeout.
 func NewClient(baseURL, apiKey string, timeout time.Duration) *Client {
+	return NewClientWithTLS(baseURL, apiKey, timeout, nil)
+}
+
+// NewClientWithTLS creates a LAPI client that uses tlsCfg for HTTPS calls.
+// A nil tlsCfg keeps Go's defaults.
+func NewClientWithTLS(baseURL, apiKey string, timeout time.Duration, tlsCfg *tls.Config) *Client {
 	if timeout <= 0 {
 		timeout = 120 * time.Second // default for large decision sets
 	}
-	return &Client{
-		baseURL: baseURL,
-		apiKey:  apiKey,
-		httpClient: &http.Client{
-			Timeout: timeout,
-		},
+	hc := &http.Client{Timeout: timeout}
+	if tlsCfg != nil {
+		hc.Transport = &http.Transport{
+			Proxy:           http.ProxyFromEnvironment,
+			TLSClientConfig: tlsCfg,
+		}
 	}
+	return &Client{baseURL: baseURL, apiKey: apiKey, httpClient: hc}
 }
 
 // GetDecisions fetches all active decisions from the LAPI.
