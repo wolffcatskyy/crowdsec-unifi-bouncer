@@ -67,19 +67,36 @@ type Handler struct {
 
 // New creates a new Handler.
 func New(cfg *config.Config, logger *slog.Logger) *Handler {
+	tlsCfg, err := lapi.BuildTLSConfig(lapi.TLSOptions{
+		CACertPath:         cfg.UpstreamTLS.CACertPath,
+		ClientCertPath:     cfg.UpstreamTLS.ClientCertPath,
+		ClientKeyPath:      cfg.UpstreamTLS.ClientKeyPath,
+		InsecureSkipVerify: cfg.UpstreamTLS.InsecureSkipVerify,
+	})
+	if err != nil {
+		// Fail soft on startup: log loudly and fall back to default TLS so the
+		// error is visible per request rather than crashing the sidecar.
+		logger.Error("upstream TLS config invalid; using default TLS settings", "error", err)
+		tlsCfg = nil
+	}
+	if cfg.UpstreamTLS.InsecureSkipVerify {
+		logger.Warn("upstream_tls.insecure_skip_verify is enabled; LAPI certificate is NOT verified")
+	}
+	passthroughTransport := &http.Transport{
+		MaxIdleConns:        10,
+		MaxIdleConnsPerHost: 5,
+		IdleConnTimeout:     90 * time.Second,
+		TLSClientConfig:     tlsCfg,
+	}
 	return &Handler{
 		cfg:       cfg,
-		client:    lapi.NewClient(cfg.UpstreamLAPIURL, cfg.UpstreamLAPIKey, cfg.UpstreamTimeout),
+		client:    lapi.NewClientWithTLS(cfg.UpstreamLAPIURL, cfg.UpstreamLAPIKey, cfg.UpstreamTimeout, tlsCfg),
 		scorer:    scorer.New(&cfg.Scoring),
 		logger:    logger,
 		startTime: time.Now(),
 		passthroughHTTP: &http.Client{
-			Timeout: 30 * time.Second,
-			Transport: &http.Transport{
-				MaxIdleConns:        10,
-				MaxIdleConnsPerHost: 5,
-				IdleConnTimeout:     90 * time.Second,
-			},
+			Timeout:   30 * time.Second,
+			Transport: passthroughTransport,
 		},
 		streamTracker:   tracker.New(cfg.MaxDecisions, tracker.EvictionMode(cfg.EvictionMode), logger),
 		streamTrackerV6: tracker.New(cfg.EffectiveMaxDecisionsV6(), tracker.EvictionMode(cfg.EvictionMode), logger),
