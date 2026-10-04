@@ -563,3 +563,11 @@ scoring:
 		}
 	})
 }
+
+func TestValidate_UpstreamTLSPairing(t *testing.T) {
+	cfg := &Config{ListenAddr: ":1", UpstreamLAPIURL: "https://x", UpstreamLAPIKey: "k", MaxDecisions: 1}
+	cfg.UpstreamTLS.ClientCertPath = "c.pem"
+	if err := cfg.Validate(); err == nil {
+		t.Fatal("expected error when client cert set without key")
+	}
+}
