@@ -2,9 +2,12 @@ package lapi
 
 import (
 	"context"
+	"encoding/pem"
 	"net/http"
 	"net/http/httptest"
 	"net/url"
+	"os"
+	"path/filepath"
 	"testing"
 )
 
@@ -137,5 +140,55 @@ func TestClient_GetAlerts_ParsesFields(t *testing.T) {
 	}
 	if alert.Source.Scope != "ip" {
 		t.Errorf("Source.Scope = %s, want ip", alert.Source.Scope)
+	}
+}
+
+func TestClient_TLS(t *testing.T) {
+	srv := httptest.NewTLSServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Write([]byte("[]"))
+	}))
+	defer srv.Close()
+
+	// Default client must reject the self-signed server cert.
+	if _, err := NewClient(srv.URL, "k", 0).GetDecisions(context.Background(), nil); err == nil {
+		t.Fatal("expected certificate error with default TLS")
+	}
+
+	// With the server CA configured it succeeds.
+	dir := t.TempDir()
+	caPath := filepath.Join(dir, "ca.pem")
+	pemBytes := pem.EncodeToMemory(&pem.Block{Type: "CERTIFICATE", Bytes: srv.Certificate().Raw})
+	if err := os.WriteFile(caPath, pemBytes, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	cfg, err := BuildTLSConfig(TLSOptions{CACertPath: caPath})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := NewClientWithTLS(srv.URL, "k", 0, cfg).GetDecisions(context.Background(), nil); err != nil {
+		t.Fatalf("CA-configured client failed: %v", err)
+	}
+
+	// insecure_skip_verify also works.
+	cfg, _ = BuildTLSConfig(TLSOptions{InsecureSkipVerify: true})
+	if _, err := NewClientWithTLS(srv.URL, "k", 0, cfg).GetDecisions(context.Background(), nil); err != nil {
+		t.Fatalf("insecure client failed: %v", err)
+	}
+}
+
+func TestBuildTLSConfig_Errors(t *testing.T) {
+	if cfg, err := BuildTLSConfig(TLSOptions{}); cfg != nil || err != nil {
+		t.Fatal("zero options should return nil config")
+	}
+	if _, err := BuildTLSConfig(TLSOptions{CACertPath: "/nonexistent"}); err == nil {
+		t.Fatal("expected error for missing CA")
+	}
+	bad := filepath.Join(t.TempDir(), "bad.pem")
+	os.WriteFile(bad, []byte("not pem"), 0o600)
+	if _, err := BuildTLSConfig(TLSOptions{CACertPath: bad}); err == nil {
+		t.Fatal("expected error for invalid PEM")
+	}
+	if _, err := BuildTLSConfig(TLSOptions{ClientCertPath: "c.pem"}); err == nil {
+		t.Fatal("expected error when key missing")
 	}
 }
