@@ -91,3 +91,34 @@ ipset destroy crowdsec-blacklists 2>/dev/null
 crontab -l | grep -v ensure-rules.sh | crontab -
 rm -rf /data/crowdsec-bouncer
 ```
+
+## TLS-enabled LAPI (sidecar)
+
+If your CrowdSec LAPI is served over HTTPS, set `upstream_lapi_url` to the `https://` address and configure trust in the sidecar's `config.yaml`:
+
+```yaml
+upstream_tls:
+  ca_cert_path: "/certs/ca.pem"          # CA that signed the LAPI certificate
+  client_cert_path: "/certs/client.pem"  # only for mutual TLS
+  client_key_path: "/certs/client-key.pem"
+```
+
+| Option | Environment variable | Notes |
+|---|---|---|
+| `upstream_tls.ca_cert_path` | `UPSTREAM_LAPI_CA_CERT` | PEM CA bundle, added to the system trust store |
+| `upstream_tls.client_cert_path` | `UPSTREAM_LAPI_CLIENT_CERT` | PEM client certificate; requires the key |
+| `upstream_tls.client_key_path` | `UPSTREAM_LAPI_CLIENT_KEY` | PEM client key; requires the certificate |
+| `upstream_tls.insecure_skip_verify` | `UPSTREAM_LAPI_TLS_INSECURE_SKIP_VERIFY` | Disables certificate verification. Testing only |
+
+With Docker, mount the certificates into the container and point the variables at the mounted paths:
+
+```yaml
+services:
+  sidecar:
+    environment:
+      - UPSTREAM_LAPI_CA_CERT=/certs/ca.pem
+    volumes:
+      - ./certs:/certs:ro
+```
+
+The settings apply to every outgoing request to the LAPI. If none are set, behaviour is unchanged.
