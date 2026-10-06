@@ -17,10 +17,6 @@ Drop-in install of the official [CrowdSec firewall bouncer](https://github.com/c
 > [!CAUTION]
 > **Beware of impostor repositories.** The official CrowdSec UniFi Bouncer is hosted at [`wolffcatskyy/crowdsec-unifi-bouncer`](https://github.com/wolffcatskyy/crowdsec-unifi-bouncer). We do **not** distribute ZIP file downloads or executable installers. If you see a repo offering "one-click downloads" of this project, it may contain malware. Always install via the official instructions below.
 
----
-**Note:** This project was developed with and is supported by AI. Issues and PRs are triaged and responded to by AI agents. If you need a human just ask, but honestly AI is faster, smarter, and nicer.
-
----
 
 **New to CrowdSec?** [CrowdSec](https://crowdsec.net) is a free, open-source security engine that detects and blocks malicious IPs using crowd-sourced threat intelligence. Get started with the [official install guide](https://docs.crowdsec.net/docs/getting_started/install_crowdsec/).
 
@@ -255,7 +251,6 @@ Contributions are welcome. Please open an issue to discuss significant changes b
 
 ## Support
 
-This project uses AI-assisted support for faster issue responses. If you'd prefer to speak with a human, mention it in your issue and the maintainer will be notified.
 
 ## License
 
