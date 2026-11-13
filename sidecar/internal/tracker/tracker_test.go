@@ -930,3 +930,58 @@ func TestStreamTracker_LocalBanFromFullSyncSuppressesEvictionDeletion(t *testing
 		t.Fatalf("expected suppression for locally-banned value, got %d evicted", len(evicted))
 	}
 }
+
+// After a suppressed eviction, the value's ipset entry is still held by the
+// local ban; when that ban expires its own (forwarded) deletion removes the
+// entry, so no orphan slot is retained. Afterwards a re-issued CAPI decision
+// for the value is treated as new again.
+func TestStreamTracker_SuppressedEvictionLeavesNoOrphanAfterLocalBanClears(t *testing.T) {
+	tr := New(1, ModeEvict, testLogger())
+
+	// Fill the cap and locally ban the tracked value
+	_, _ = tr.FilterStreamDecisions(&lapi.DecisionStream{
+		New: []lapi.Decision{
+			{ID: 1, Origin: "CAPI", Value: "1.1.1.1", Scope: "ip", Type: "ban"},
+		},
+	})
+	_, _ = tr.FilterStreamDecisions(&lapi.DecisionStream{
+		New: []lapi.Decision{
+			{ID: 2, Origin: "crowdsec", Value: "1.1.1.1", Scope: "ip", Type: "ban"},
+		},
+	})
+
+	// Evict: suppressed deletion, value stays loaded via the local ban
+	kept, evicted := tr.FilterStreamDecisions(&lapi.DecisionStream{
+		New: []lapi.Decision{
+			{ID: 3, Origin: "CAPI", Value: "2.2.2.2", Scope: "ip", Type: "ban"},
+		},
+	})
+	if len(kept) != 1 || len(evicted) != 0 {
+		t.Fatalf("expected suppressed eviction (1 kept, 0 evicted), got %d kept, %d evicted", len(kept), len(evicted))
+	}
+
+	// Local ban expires: its deletion is observed (the proxy forwards it to the
+	// bouncer, which removes the ipset entry - no orphan retained)
+	_, _ = tr.FilterStreamDecisions(&lapi.DecisionStream{
+		Deleted: []lapi.Decision{
+			{ID: 2, Origin: "crowdsec", Value: "1.1.1.1"},
+		},
+	})
+
+	// The CAPI re-issue for the value is now treated as new: it passes via
+	// eviction of the other tracked value, whose deletion IS emitted
+	kept, evicted = tr.FilterStreamDecisions(&lapi.DecisionStream{
+		New: []lapi.Decision{
+			{ID: 4, Origin: "CAPI", Value: "1.1.1.1", Scope: "ip", Type: "ban"},
+		},
+	})
+	if len(kept) != 1 {
+		t.Fatalf("expected re-issued value to pass as new after local ban cleared, got %d kept", len(kept))
+	}
+	if len(evicted) != 1 || evicted[0].Value != "2.2.2.2" {
+		t.Fatalf("expected deletion for 2.2.2.2, got %+v", evicted)
+	}
+	if m := tr.GetMetrics(); m.CAPICount != 1 {
+		t.Fatalf("expected count 1 after rotation, got %d", m.CAPICount)
+	}
+}
