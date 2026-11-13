@@ -250,9 +250,12 @@ func (h *Handler) handleDecisionsStream(w http.ResponseWriter, r *http.Request) 
 		// while always passing through local decisions.
 		newV4, newV6 := SplitByFamily(stream.New)
 		delV4, delV6 := SplitByFamily(stream.Deleted)
-		keptV4 := h.streamTracker.FilterStreamDecisions(&lapi.DecisionStream{New: newV4, Deleted: delV4})
-		keptV6 := h.streamTrackerV6.FilterStreamDecisions(&lapi.DecisionStream{New: newV6, Deleted: delV6})
+		keptV4, evictedV4 := h.streamTracker.FilterStreamDecisions(&lapi.DecisionStream{New: newV4, Deleted: delV4})
+		keptV6, evictedV6 := h.streamTrackerV6.FilterStreamDecisions(&lapi.DecisionStream{New: newV6, Deleted: delV6})
 		stream.New = append(keptV4, keptV6...)
+		// Evicted decisions must be deleted downstream so evict mode actually
+		// frees ipset slots instead of leaking them (issue #81).
+		stream.Deleted = append(stream.Deleted, append(evictedV4, evictedV6...)...)
 
 		// Report new incremental decisions to AbuseIPDB (non-startup only).
 		// Startup decisions are existing bans, not new detections.

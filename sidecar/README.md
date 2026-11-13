@@ -240,6 +240,8 @@ The `eviction_mode` setting controls how the sidecar handles incremental CAPI de
 
 Both modes always pass through local decisions (origin: `crowdsec`, `cscli`) regardless of the CAPI cap. Local detections from your own network are never dropped or evicted.
 
+Re-issued decisions also pass through in both modes: when the LAPI sends a fresh decision for a value the sidecar already forwarded (for example when a list refreshes), it occupies no new slot in the bouncer, so it does not count against the cap. Only genuinely new CAPI values consume cap space.
+
 ```yaml
 # In config.yaml:
 eviction_mode: "cap"    # or "evict"

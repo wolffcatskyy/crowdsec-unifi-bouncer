@@ -24,7 +24,7 @@ func TestStreamTracker_LocalDecisionsAlwaysPass(t *testing.T) {
 			{ID: 2, Origin: "CAPI", Value: "2.2.2.2", Scope: "ip"},
 		},
 	}
-	kept := tr.FilterStreamDecisions(stream)
+	kept, _ := tr.FilterStreamDecisions(stream)
 	if len(kept) != 2 {
 		t.Fatalf("expected 2 kept, got %d", len(kept))
 	}
@@ -37,7 +37,7 @@ func TestStreamTracker_LocalDecisionsAlwaysPass(t *testing.T) {
 			{ID: 5, Origin: "cscli", Value: "5.5.5.5", Scope: "ip"},
 		},
 	}
-	kept = tr.FilterStreamDecisions(stream)
+	kept, _ = tr.FilterStreamDecisions(stream)
 
 	if len(kept) != 2 {
 		t.Fatalf("expected 2 kept (local only), got %d", len(kept))
@@ -72,7 +72,7 @@ func TestStreamTracker_CapMode(t *testing.T) {
 			{ID: 5, Origin: "CAPI", Value: "5.5.5.5", Scope: "ip"},
 		},
 	}
-	kept := tr.FilterStreamDecisions(stream)
+	kept, _ := tr.FilterStreamDecisions(stream)
 
 	if len(kept) != 3 {
 		t.Fatalf("expected 3 kept, got %d", len(kept))
@@ -98,7 +98,7 @@ func TestStreamTracker_EvictMode(t *testing.T) {
 			{ID: 3, Origin: "CAPI", Value: "3.3.3.3", Scope: "ip"},
 		},
 	}
-	kept := tr.FilterStreamDecisions(stream)
+	kept, _ := tr.FilterStreamDecisions(stream)
 	if len(kept) != 3 {
 		t.Fatalf("expected 3 kept, got %d", len(kept))
 	}
@@ -110,7 +110,7 @@ func TestStreamTracker_EvictMode(t *testing.T) {
 			{ID: 5, Origin: "CAPI", Value: "5.5.5.5", Scope: "ip"},
 		},
 	}
-	kept = tr.FilterStreamDecisions(stream)
+	kept, _ = tr.FilterStreamDecisions(stream)
 
 	if len(kept) != 2 {
 		t.Fatalf("expected 2 kept (evicted), got %d", len(kept))
@@ -138,7 +138,7 @@ func TestStreamTracker_DeletionFreesCapacity(t *testing.T) {
 			{ID: 2, Origin: "CAPI", Value: "2.2.2.2", Scope: "ip"},
 		},
 	}
-	tr.FilterStreamDecisions(stream)
+	_, _ = tr.FilterStreamDecisions(stream)
 
 	// Delete one decision, then add a new one
 	stream = &lapi.DecisionStream{
@@ -149,7 +149,7 @@ func TestStreamTracker_DeletionFreesCapacity(t *testing.T) {
 			{ID: 3, Origin: "CAPI", Value: "3.3.3.3", Scope: "ip"},
 		},
 	}
-	kept := tr.FilterStreamDecisions(stream)
+	kept, _ := tr.FilterStreamDecisions(stream)
 
 	if len(kept) != 1 {
 		t.Fatalf("expected 1 kept after deletion freed capacity, got %d", len(kept))
@@ -174,7 +174,7 @@ func TestStreamTracker_ResetOnFullSync(t *testing.T) {
 			{ID: 2, Origin: "CAPI", Value: "2.2.2.2", Scope: "ip"},
 		},
 	}
-	tr.FilterStreamDecisions(stream)
+	_, _ = tr.FilterStreamDecisions(stream)
 
 	// Reset (simulating full sync)
 	tr.Reset()
@@ -193,7 +193,7 @@ func TestStreamTracker_ResetOnFullSync(t *testing.T) {
 			{ID: 3, Origin: "CAPI", Value: "3.3.3.3", Scope: "ip"},
 		},
 	}
-	kept := tr.FilterStreamDecisions(stream)
+	kept, _ := tr.FilterStreamDecisions(stream)
 	if len(kept) != 1 {
 		t.Fatalf("expected 1 kept after reset, got %d", len(kept))
 	}
@@ -229,7 +229,7 @@ func TestStreamTracker_SetCapFromFullSync(t *testing.T) {
 			{ID: 7, Origin: "CAPI", Value: "7.7.7.7", Scope: "ip"},
 		},
 	}
-	kept := tr.FilterStreamDecisions(stream)
+	kept, _ := tr.FilterStreamDecisions(stream)
 	if len(kept) != 3 {
 		t.Fatalf("expected 3 kept (cap only applies to incrementals), got %d", len(kept))
 	}
@@ -254,7 +254,7 @@ func TestStreamTracker_DuplicateDecisionsNotDoubleCounted(t *testing.T) {
 			{ID: 3, Origin: "CAPI", Value: "2.2.2.2", Scope: "ip"},
 		},
 	}
-	kept := tr.FilterStreamDecisions(stream)
+	kept, _ := tr.FilterStreamDecisions(stream)
 
 	if len(kept) != 3 {
 		t.Fatalf("expected 3 kept (duplicate not double-counted), got %d", len(kept))
@@ -289,7 +289,7 @@ func TestStreamTracker_IncrementalAccumulation(t *testing.T) {
 				{ID: 100 + i, Origin: "CAPI", Value: makeIP(100 + i), Scope: "ip"},
 			},
 		}
-		kept := tr.FilterStreamDecisions(stream)
+		kept, _ := tr.FilterStreamDecisions(stream)
 		if len(kept) != 1 {
 			t.Errorf("incremental %d: expected 1 kept (under cap), got %d", i, len(kept))
 		}
@@ -302,7 +302,7 @@ func TestStreamTracker_IncrementalAccumulation(t *testing.T) {
 				{ID: 100 + i, Origin: "CAPI", Value: makeIP(100 + i), Scope: "ip"},
 			},
 		}
-		kept := tr.FilterStreamDecisions(stream)
+		kept, _ := tr.FilterStreamDecisions(stream)
 		if len(kept) != 0 {
 			t.Errorf("incremental %d: expected 0 kept (at cap), got %d", i, len(kept))
 		}
@@ -355,7 +355,7 @@ func TestStreamTracker_FullSyncExceedsMaxDecisions(t *testing.T) {
 				{ID: 100 + i, Origin: "CAPI", Value: makeIP(100 + i), Scope: "ip"},
 			},
 		}
-		kept := tr.FilterStreamDecisions(stream)
+		kept, _ := tr.FilterStreamDecisions(stream)
 		if len(kept) != 1 {
 			t.Errorf("incremental %d: expected 1 kept, got %d", i, len(kept))
 		}
@@ -367,7 +367,7 @@ func TestStreamTracker_FullSyncExceedsMaxDecisions(t *testing.T) {
 			{ID: 103, Origin: "CAPI", Value: makeIP(103), Scope: "ip"},
 		},
 	}
-	kept := tr.FilterStreamDecisions(stream)
+	kept, _ := tr.FilterStreamDecisions(stream)
 	if len(kept) != 0 {
 		t.Errorf("expected 0 kept (at incremental cap), got %d", len(kept))
 	}
@@ -389,7 +389,7 @@ func TestStreamTracker_FullSyncExceedsMaxDecisions(t *testing.T) {
 			{ID: 200, Origin: "crowdsec", Value: "10.0.0.1", Scope: "ip"},
 		},
 	}
-	kept = tr.FilterStreamDecisions(stream)
+	kept, _ = tr.FilterStreamDecisions(stream)
 	if len(kept) != 1 {
 		t.Errorf("expected 1 kept (local passes even at cap), got %d", len(kept))
 	}
@@ -424,7 +424,7 @@ func TestStreamTracker_EvictModeBaselineProtected(t *testing.T) {
 				{ID: 10 + i, Origin: "CAPI", Value: makeIP(10 + i), Scope: "ip"},
 			},
 		}
-		kept := tr.FilterStreamDecisions(stream)
+		kept, _ := tr.FilterStreamDecisions(stream)
 		if len(kept) != 1 {
 			t.Errorf("incremental %d: expected 1 kept, got %d", i, len(kept))
 		}
@@ -441,7 +441,7 @@ func TestStreamTracker_EvictModeBaselineProtected(t *testing.T) {
 			{ID: 20, Origin: "CAPI", Value: "10.0.0.100", Scope: "ip"},
 		},
 	}
-	kept := tr.FilterStreamDecisions(stream)
+	kept, _ := tr.FilterStreamDecisions(stream)
 	if len(kept) != 1 {
 		t.Fatalf("expected 1 kept (evicted), got %d", len(kept))
 	}
@@ -491,7 +491,7 @@ func TestStreamTracker_EvictModePreservesCount(t *testing.T) {
 			{ID: 3, Origin: "CAPI", Value: "3.3.3.3", Scope: "ip"},
 		},
 	}
-	tr.FilterStreamDecisions(stream)
+	_, _ = tr.FilterStreamDecisions(stream)
 
 	// Add 5 more one at a time (should evict each time)
 	for i := 4; i <= 8; i++ {
@@ -500,7 +500,7 @@ func TestStreamTracker_EvictModePreservesCount(t *testing.T) {
 				{ID: i, Origin: "CAPI", Value: makeIP(i), Scope: "ip"},
 			},
 		}
-		tr.FilterStreamDecisions(stream)
+		_, _ = tr.FilterStreamDecisions(stream)
 
 		metrics := tr.GetMetrics()
 		if metrics.CAPICount != 3 {
@@ -524,7 +524,7 @@ func TestStreamTracker_MixedLocalAndCAPI(t *testing.T) {
 			{ID: 2, Origin: "CAPI", Value: "2.2.2.2", Scope: "ip"},
 		},
 	}
-	tr.FilterStreamDecisions(stream)
+	_, _ = tr.FilterStreamDecisions(stream)
 
 	// Mixed batch: local decisions should pass, CAPI should be dropped
 	stream = &lapi.DecisionStream{
@@ -535,7 +535,7 @@ func TestStreamTracker_MixedLocalAndCAPI(t *testing.T) {
 			{ID: 6, Origin: "CAPI", Value: "6.6.6.6", Scope: "ip"},
 		},
 	}
-	kept := tr.FilterStreamDecisions(stream)
+	kept, _ := tr.FilterStreamDecisions(stream)
 
 	if len(kept) != 2 {
 		t.Fatalf("expected 2 kept (only locals), got %d", len(kept))
@@ -590,7 +590,7 @@ func TestStreamTracker_IncrementalDeletionFreesCapacity(t *testing.T) {
 			{ID: 2, Origin: "CAPI", Value: "2.2.2.2", Scope: "ip"},
 		},
 	}
-	tr.FilterStreamDecisions(stream)
+	_, _ = tr.FilterStreamDecisions(stream)
 
 	// Delete incremental decision, which decrements capiCount
 	stream = &lapi.DecisionStream{
@@ -601,7 +601,7 @@ func TestStreamTracker_IncrementalDeletionFreesCapacity(t *testing.T) {
 			{ID: 3, Origin: "CAPI", Value: "3.3.3.3", Scope: "ip"},
 		},
 	}
-	kept := tr.FilterStreamDecisions(stream)
+	kept, _ := tr.FilterStreamDecisions(stream)
 	if len(kept) != 1 {
 		t.Fatalf("expected 1 kept after deletion freed capacity, got %d", len(kept))
 	}
@@ -642,7 +642,7 @@ func TestStreamTracker_BaselineDeletionDoesNotAffectIncrementalCount(t *testing.
 			{ID: 1, Origin: "CAPI", Value: "10.0.0.1"},
 		},
 	}
-	tr.FilterStreamDecisions(stream)
+	_, _ = tr.FilterStreamDecisions(stream)
 
 	metrics = tr.GetMetrics()
 	// BaseCount should decrease (baseline decision removed)
@@ -660,7 +660,7 @@ func TestStreamTracker_BaselineDeletionDoesNotAffectIncrementalCount(t *testing.
 			{ID: 100, Origin: "CAPI", Value: "10.0.0.1", Scope: "ip"},
 		},
 	}
-	kept := tr.FilterStreamDecisions(stream)
+	kept, _ := tr.FilterStreamDecisions(stream)
 	if len(kept) != 1 {
 		t.Errorf("expected 1 kept (value can be re-added), got %d", len(kept))
 	}
@@ -686,4 +686,136 @@ func itoa(n int) string {
 		n /= 10
 	}
 	return s
+}
+
+// Regression tests for issue #81.
+
+// Re-issued full-sync baseline decisions must pass through at cap without
+// consuming an incremental slot. Dropping them lets the older decision expire
+// later and unloads a value that is still meant to be active.
+func TestStreamTracker_ReissuedBaselinePassesAtCap(t *testing.T) {
+	tr := New(2, ModeCap, testLogger())
+	tr.SetCapFromFullSync([]lapi.Decision{
+		{ID: 1, Origin: "CAPI", Value: "10.0.0.1", Scope: "ip"},
+		{ID: 2, Origin: "CAPI", Value: "10.0.0.2", Scope: "ip"},
+	})
+
+	// Fill the incremental cap
+	_, _ = tr.FilterStreamDecisions(&lapi.DecisionStream{
+		New: []lapi.Decision{
+			{ID: 3, Origin: "CAPI", Value: "1.1.1.1", Scope: "ip"},
+			{ID: 4, Origin: "CAPI", Value: "2.2.2.2", Scope: "ip"},
+		},
+	})
+
+	// At cap: a re-issued baseline decision still passes
+	kept, evicted := tr.FilterStreamDecisions(&lapi.DecisionStream{
+		New: []lapi.Decision{
+			{ID: 1, Origin: "CAPI", Value: "10.0.0.1", Scope: "ip"},
+		},
+	})
+	if len(kept) != 1 {
+		t.Fatalf("expected re-issued baseline decision to pass at cap, got %d kept", len(kept))
+	}
+	if len(evicted) != 0 {
+		t.Fatalf("expected no evictions in cap mode, got %d", len(evicted))
+	}
+	m := tr.GetMetrics()
+	if m.CAPICount != 2 {
+		t.Fatalf("expected incremental count to stay 2, got %d", m.CAPICount)
+	}
+
+	// A genuinely new decision at cap is still dropped (cap semantics preserved)
+	kept, _ = tr.FilterStreamDecisions(&lapi.DecisionStream{
+		New: []lapi.Decision{
+			{ID: 5, Origin: "CAPI", Value: "3.3.3.3", Scope: "ip"},
+		},
+	})
+	if len(kept) != 0 {
+		t.Fatalf("expected new decision to be dropped at cap, got %d kept", len(kept))
+	}
+}
+
+// Re-issued incremental decisions also pass at cap without consuming a slot.
+func TestStreamTracker_ReissuedIncrementalPassesAtCap(t *testing.T) {
+	tr := New(1, ModeCap, testLogger())
+
+	_, _ = tr.FilterStreamDecisions(&lapi.DecisionStream{
+		New: []lapi.Decision{
+			{ID: 1, Origin: "CAPI", Value: "1.1.1.1", Scope: "ip"},
+		},
+	})
+
+	// At cap: re-issue of the tracked incremental passes, count unchanged
+	kept, _ := tr.FilterStreamDecisions(&lapi.DecisionStream{
+		New: []lapi.Decision{
+			{ID: 2, Origin: "CAPI", Value: "1.1.1.1", Scope: "ip"},
+		},
+	})
+	if len(kept) != 1 {
+		t.Fatalf("expected re-issued incremental to pass at cap, got %d kept", len(kept))
+	}
+	if m := tr.GetMetrics(); m.CAPICount != 1 {
+		t.Fatalf("expected count to stay 1, got %d", m.CAPICount)
+	}
+
+	// New value at cap is dropped
+	kept, _ = tr.FilterStreamDecisions(&lapi.DecisionStream{
+		New: []lapi.Decision{
+			{ID: 3, Origin: "CAPI", Value: "2.2.2.2", Scope: "ip"},
+		},
+	})
+	if len(kept) != 0 {
+		t.Fatalf("expected new decision to be dropped at cap, got %d kept", len(kept))
+	}
+}
+
+// In evict mode the evicted decision is returned so the caller can delete it
+// downstream. Without the deletion the evicted value stays in the ipset and
+// leaks slots until the set fills.
+func TestStreamTracker_EvictionReturnsDecisionForDeletion(t *testing.T) {
+	tr := New(2, ModeEvict, testLogger())
+
+	_, evicted := tr.FilterStreamDecisions(&lapi.DecisionStream{
+		New: []lapi.Decision{
+			{ID: 1, Origin: "CAPI", Value: "1.1.1.1", Scope: "ip", Type: "ban"},
+			{ID: 2, Origin: "CAPI", Value: "2.2.2.2", Scope: "ip", Type: "ban"},
+		},
+	})
+	if len(evicted) != 0 {
+		t.Fatalf("expected no evictions under cap, got %d", len(evicted))
+	}
+
+	// At cap: the new decision passes and the oldest is returned for deletion
+	kept, evicted := tr.FilterStreamDecisions(&lapi.DecisionStream{
+		New: []lapi.Decision{
+			{ID: 3, Origin: "CAPI", Value: "3.3.3.3", Scope: "ip", Type: "ban"},
+		},
+	})
+	if len(kept) != 1 {
+		t.Fatalf("expected new decision to pass via eviction, got %d kept", len(kept))
+	}
+	if len(evicted) != 1 {
+		t.Fatalf("expected 1 evicted decision, got %d", len(evicted))
+	}
+	if evicted[0].Value != "1.1.1.1" {
+		t.Fatalf("expected evicted value 1.1.1.1, got %s", evicted[0].Value)
+	}
+	if evicted[0].Scope != "ip" || evicted[0].Type != "ban" {
+		t.Fatalf("expected evicted decision to carry scope/type, got %q/%q", evicted[0].Scope, evicted[0].Type)
+	}
+
+	// An evicted value is no longer tracked: re-issuing it is treated as new
+	// and evicts the next-oldest decision.
+	kept, evicted = tr.FilterStreamDecisions(&lapi.DecisionStream{
+		New: []lapi.Decision{
+			{ID: 4, Origin: "CAPI", Value: "1.1.1.1", Scope: "ip", Type: "ban"},
+		},
+	})
+	if len(kept) != 1 || len(evicted) != 1 {
+		t.Fatalf("expected re-issued evicted value to be treated as new (1 kept, 1 evicted), got %d kept, %d evicted", len(kept), len(evicted))
+	}
+	if evicted[0].Value != "2.2.2.2" {
+		t.Fatalf("expected evicted value 2.2.2.2, got %s", evicted[0].Value)
+	}
 }
