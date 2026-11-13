@@ -819,3 +819,114 @@ func TestStreamTracker_EvictionReturnsDecisionForDeletion(t *testing.T) {
 		t.Fatalf("expected evicted value 2.2.2.2, got %s", evicted[0].Value)
 	}
 }
+
+// Eviction deletion is suppressed while the evicted value also has an active
+// local ban: the bouncer deletes by value, so the deletion would also remove
+// the ipset entry the local ban relies on until the next full sync.
+func TestStreamTracker_EvictionDeletionSuppressedForActiveLocalBan(t *testing.T) {
+	tr := New(2, ModeEvict, testLogger())
+
+	// Fill the incremental cap with two CAPI decisions
+	_, _ = tr.FilterStreamDecisions(&lapi.DecisionStream{
+		New: []lapi.Decision{
+			{ID: 1, Origin: "CAPI", Value: "1.1.1.1", Scope: "ip", Type: "ban"},
+			{ID: 2, Origin: "CAPI", Value: "2.2.2.2", Scope: "ip", Type: "ban"},
+		},
+	})
+
+	// A local ban arrives for the oldest tracked value
+	kept, _ := tr.FilterStreamDecisions(&lapi.DecisionStream{
+		New: []lapi.Decision{
+			{ID: 3, Origin: "crowdsec", Value: "1.1.1.1", Scope: "ip", Type: "ban"},
+		},
+	})
+	if len(kept) != 1 {
+		t.Fatalf("expected local decision to pass, got %d kept", len(kept))
+	}
+
+	// At cap: eviction of 1.1.1.1 proceeds in the tracker, but no deletion is
+	// emitted because a local ban is active for that value
+	kept, evicted := tr.FilterStreamDecisions(&lapi.DecisionStream{
+		New: []lapi.Decision{
+			{ID: 4, Origin: "CAPI", Value: "3.3.3.3", Scope: "ip", Type: "ban"},
+		},
+	})
+	if len(kept) != 1 {
+		t.Fatalf("expected new decision to pass via eviction, got %d kept", len(kept))
+	}
+	if len(evicted) != 0 {
+		t.Fatalf("expected eviction deletion to be suppressed for active local ban, got %d evicted", len(evicted))
+	}
+
+	// A second locally-banned decision for the same value, then one deletion:
+	// the ban is still active (refcounted), suppression still applies
+	_, _ = tr.FilterStreamDecisions(&lapi.DecisionStream{
+		New: []lapi.Decision{
+			{ID: 5, Origin: "cscli", Value: "2.2.2.2", Scope: "ip", Type: "ban"},
+			{ID: 6, Origin: "cscli", Value: "2.2.2.2", Scope: "ip", Type: "ban"},
+		},
+	})
+	_, _ = tr.FilterStreamDecisions(&lapi.DecisionStream{
+		Deleted: []lapi.Decision{
+			{ID: 6, Origin: "cscli", Value: "2.2.2.2"},
+		},
+	})
+	_, evicted = tr.FilterStreamDecisions(&lapi.DecisionStream{
+		New: []lapi.Decision{
+			{ID: 7, Origin: "CAPI", Value: "4.4.4.4", Scope: "ip", Type: "ban"},
+		},
+	})
+	if len(evicted) != 0 {
+		t.Fatalf("expected suppression while one local ban remains, got %d evicted", len(evicted))
+	}
+
+	// Once the last local ban for the value is deleted, the next eviction of a
+	// value without a local ban emits its deletion normally
+	_, _ = tr.FilterStreamDecisions(&lapi.DecisionStream{
+		Deleted: []lapi.Decision{
+			{ID: 5, Origin: "cscli", Value: "2.2.2.2"},
+		},
+	})
+	kept, evicted = tr.FilterStreamDecisions(&lapi.DecisionStream{
+		New: []lapi.Decision{
+			{ID: 8, Origin: "CAPI", Value: "5.5.5.5", Scope: "ip", Type: "ban"},
+		},
+	})
+	if len(kept) != 1 || len(evicted) != 1 {
+		t.Fatalf("expected eviction with deletion after local ban cleared, got %d kept, %d evicted", len(kept), len(evicted))
+	}
+	if evicted[0].Value != "3.3.3.3" {
+		t.Fatalf("expected evicted value 3.3.3.3, got %s", evicted[0].Value)
+	}
+}
+
+// Local ban state is rebuilt from the full sync baseline, so a local ban that
+// predates the sidecar's start still suppresses eviction deletions.
+func TestStreamTracker_LocalBanFromFullSyncSuppressesEvictionDeletion(t *testing.T) {
+	tr := New(1, ModeEvict, testLogger())
+	tr.SetCapFromFullSync([]lapi.Decision{
+		{ID: 1, Origin: "crowdsec", Value: "9.9.9.9", Scope: "ip", Type: "ban"},
+		{ID: 2, Origin: "CAPI", Value: "10.0.0.1", Scope: "ip"},
+	})
+
+	_, _ = tr.FilterStreamDecisions(&lapi.DecisionStream{
+		New: []lapi.Decision{
+			{ID: 3, Origin: "CAPI", Value: "1.1.1.1", Scope: "ip", Type: "ban"},
+		},
+	})
+
+	// Track a local ban for the tracked incremental, then evict it
+	_, _ = tr.FilterStreamDecisions(&lapi.DecisionStream{
+		New: []lapi.Decision{
+			{ID: 4, Origin: "crowdsec", Value: "1.1.1.1", Scope: "ip", Type: "ban"},
+		},
+	})
+	_, evicted := tr.FilterStreamDecisions(&lapi.DecisionStream{
+		New: []lapi.Decision{
+			{ID: 5, Origin: "CAPI", Value: "2.2.2.2", Scope: "ip", Type: "ban"},
+		},
+	})
+	if len(evicted) != 0 {
+		t.Fatalf("expected suppression for locally-banned value, got %d evicted", len(evicted))
+	}
+}
