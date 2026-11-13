@@ -47,9 +47,13 @@ func IsLocalOrigin(origin string) bool {
 	return localOrigins[origin]
 }
 
-// trackedDecision stores minimal info about a CAPI decision for eviction ordering.
+// trackedDecision stores minimal info about a CAPI decision for eviction ordering,
+// plus what is needed to emit a downstream deletion when the value is evicted.
 type trackedDecision struct {
 	value     string // IP or CIDR value
+	scope     string
+	typ       string
+	origin    string
 	addedAt   time.Time
 	createdAt time.Time
 }
@@ -87,6 +91,13 @@ type StreamTracker struct {
 	// These are not counted in capiCount and are never subject to eviction.
 	fullSyncSet map[string]struct{}
 
+	// Refcount of active LOCAL decisions per value. Local decisions always pass
+	// through untracked, but an eviction deletion for a value that also has an
+	// active local ban would remove the ipset entry the local ban relies on, so
+	// the deletion is suppressed while the refcount is positive (issue #81
+	// follow-up).
+	localActive map[string]int
+
 	// Metrics (atomic for lock-free reads from metrics endpoint)
 	decisionsPassed atomic.Int64
 	decisionsDropped atomic.Int64
@@ -119,6 +130,7 @@ func New(maxDecisions int, mode EvictionMode, logger *slog.Logger) *StreamTracke
 		logger:       logger,
 		trackedSet:   make(map[string]struct{}),
 		fullSyncSet:  make(map[string]struct{}),
+		localActive:  make(map[string]int),
 	}
 }
 
@@ -131,6 +143,7 @@ func (t *StreamTracker) Reset() {
 	t.tracked = nil
 	t.trackedSet = make(map[string]struct{})
 	t.fullSyncSet = make(map[string]struct{})
+	t.localActive = make(map[string]int)
 	t.fullSyncs.Add(1)
 	t.lastFullSync.Store(time.Now().Unix())
 
@@ -139,40 +152,75 @@ func (t *StreamTracker) Reset() {
 
 // FilterStreamDecisions processes a batch of incremental stream decisions,
 // enforcing the CAPI cap while always passing through local decisions.
-// It modifies the stream in place and returns the filtered new decisions.
+// It modifies the stream in place and returns the filtered new decisions,
+// plus any evicted decisions that must be deleted downstream.
 //
 // Deleted decisions are also tracked: when a CAPI decision is deleted,
 // the cumulative count is decremented, freeing capacity for new decisions.
-func (t *StreamTracker) FilterStreamDecisions(stream *lapi.DecisionStream) []lapi.Decision {
+//
+// The second return value lists decisions evicted in evict mode. Callers must
+// send these downstream as deletions: evicting a value from the tracker
+// without deleting it from the bouncer leaves it in the ipset forever,
+// leaking slots until the set fills (issue #81).
+func (t *StreamTracker) FilterStreamDecisions(stream *lapi.DecisionStream) (kept []lapi.Decision, evicted []lapi.Decision) {
 	t.mu.Lock()
 	defer t.mu.Unlock()
 
 	// Process deletions first — free up capacity
 	for _, d := range stream.Deleted {
-		if !IsLocalOrigin(d.Origin) {
-			t.removeTracked(d.Value)
+		if IsLocalOrigin(d.Origin) {
+			if t.localActive[d.Value] > 1 {
+				t.localActive[d.Value]--
+			} else {
+				delete(t.localActive, d.Value)
+			}
+			continue
 		}
+		t.removeTracked(d.Value)
 	}
 
 	// Filter new decisions
-	var kept []lapi.Decision
 	for _, d := range stream.New {
 		if IsLocalOrigin(d.Origin) {
 			// Local decisions always pass through
 			kept = append(kept, d)
 			t.decisionsPassed.Add(1)
+			t.localActive[d.Value]++
 			continue
 		}
 
-		// CAPI/community decision — check cap
+		// Re-issued decision for a value already passed downstream (full-sync
+		// baseline or tracked incremental): it occupies no new slot, so it
+		// passes without consuming cap. Dropping it at cap would let the older
+		// decision expire later and remove a value that is still meant to be
+		// loaded (issue #81).
+		if _, alreadyLoaded := t.trackedSet[d.Value]; alreadyLoaded {
+			kept = append(kept, d)
+			t.decisionsPassed.Add(1)
+			continue
+		}
+
+		// Genuinely new CAPI/community decision — check cap
 		if t.capiCount < t.maxDecisions {
 			// Under cap — pass through
 			kept = append(kept, d)
 			t.addTracked(d)
 			t.decisionsPassed.Add(1)
 		} else if t.mode == ModeEvict {
-			// At cap in evict mode — replace oldest
-			if t.evictOldest() {
+			// At cap in evict mode — replace oldest, and return the evicted
+			// decision so the caller deletes it downstream
+			if ev, ok := t.evictOldest(); ok {
+				// Suppress the deletion when a local ban is active for the same
+				// value: the bouncer deletes by value, so it would also remove
+				// the ipset entry the local ban relies on until the next full
+				// sync reloads it.
+				if t.localActive[ev.Value] == 0 {
+					evicted = append(evicted, ev)
+				} else {
+					t.logger.Debug("stream cap: suppressed eviction deletion (local ban active)",
+						"value", ev.Value,
+					)
+				}
 				kept = append(kept, d)
 				t.addTracked(d)
 				t.decisionsPassed.Add(1)
@@ -197,7 +245,7 @@ func (t *StreamTracker) FilterStreamDecisions(stream *lapi.DecisionStream) []lap
 		}
 	}
 
-	return kept
+	return kept, evicted
 }
 
 // addTracked adds a CAPI decision to the tracking state.
@@ -213,6 +261,9 @@ func (t *StreamTracker) addTracked(d lapi.Decision) {
 	if t.mode == ModeEvict {
 		t.tracked = append(t.tracked, trackedDecision{
 			value:     d.Value,
+			scope:     d.Scope,
+			typ:       d.Type,
+			origin:    d.Origin,
 			addedAt:   time.Now(),
 			createdAt: d.ParsedCreated,
 		})
@@ -250,11 +301,12 @@ func (t *StreamTracker) removeTracked(value string) {
 	}
 }
 
-// evictOldest removes the oldest tracked CAPI decision to make room for a new one.
-// Returns true if a decision was evicted, false if nothing to evict.
-func (t *StreamTracker) evictOldest() bool {
+// evictOldest removes the oldest tracked CAPI decision to make room for a new one
+// and returns it so the caller can delete it downstream. The second return value
+// is false when there is nothing to evict.
+func (t *StreamTracker) evictOldest() (lapi.Decision, bool) {
 	if len(t.tracked) == 0 {
-		return false
+		return lapi.Decision{}, false
 	}
 
 	oldest := t.tracked[0]
@@ -267,7 +319,12 @@ func (t *StreamTracker) evictOldest() bool {
 		"age", time.Since(oldest.addedAt).Round(time.Second),
 	)
 
-	return true
+	return lapi.Decision{
+		Origin: oldest.origin,
+		Type:   oldest.typ,
+		Scope:  oldest.scope,
+		Value:  oldest.value,
+	}, true
 }
 
 // SetCapFromFullSync records the CAPI decisions from a full sync response as the
@@ -285,14 +342,17 @@ func (t *StreamTracker) SetCapFromFullSync(capiDecisions []lapi.Decision) {
 	t.tracked = nil
 	t.trackedSet = make(map[string]struct{})
 	t.fullSyncSet = make(map[string]struct{})
+	t.localActive = make(map[string]int)
 
 	// Populate the baseline set from the full sync response
 	// These are NOT counted in capiCount — they're authoritative and always passed through
 	for _, d := range capiDecisions {
-		if !IsLocalOrigin(d.Origin) {
-			t.fullSyncSet[d.Value] = struct{}{}
-			t.trackedSet[d.Value] = struct{}{}
+		if IsLocalOrigin(d.Origin) {
+			t.localActive[d.Value]++
+			continue
 		}
+		t.fullSyncSet[d.Value] = struct{}{}
+		t.trackedSet[d.Value] = struct{}{}
 	}
 
 	t.logger.Info("stream tracker initialized from full sync",
