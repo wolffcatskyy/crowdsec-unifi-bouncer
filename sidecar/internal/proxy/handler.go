@@ -54,8 +54,10 @@ type Handler struct {
 
 	// Stream-aware decision capping (per address family: the device keeps
 	// separate v4/v6 ipsets with separate maxelem, so caps are independent)
-	streamTracker   *tracker.StreamTracker
-	streamTrackerV6 *tracker.StreamTracker
+	streamMu          sync.Mutex // total-mode gate, fetch and both-family state updates
+	streamInitialized bool
+	streamTracker     *tracker.StreamTracker
+	streamTrackerV6   *tracker.StreamTracker
 
 	// AbuseIPDB reporter
 	abuseReporter *abuseipdb.Reporter
@@ -98,8 +100,8 @@ func New(cfg *config.Config, logger *slog.Logger) *Handler {
 			Timeout:   30 * time.Second,
 			Transport: passthroughTransport,
 		},
-		streamTracker:   tracker.New(cfg.MaxDecisions, tracker.EvictionMode(cfg.EvictionMode), logger),
-		streamTrackerV6: tracker.New(cfg.EffectiveMaxDecisionsV6(), tracker.EvictionMode(cfg.EvictionMode), logger),
+		streamTracker:   tracker.NewWithScope(cfg.MaxDecisions, tracker.EvictionMode(cfg.EvictionMode), cfg.CapScope == "total", logger),
+		streamTrackerV6: tracker.NewWithScope(cfg.EffectiveMaxDecisionsV6(), tracker.EvictionMode(cfg.EvictionMode), cfg.CapScope == "total", logger),
 		abuseReporter:   abuseipdb.New(cfg.AbuseIPDB, logger),
 	}
 }
@@ -206,6 +208,17 @@ func (h *Handler) handleDecisionsStream(w http.ResponseWriter, r *http.Request) 
 	ctx := r.Context()
 	startup := r.URL.Query().Get("startup") == "true"
 
+	if h.cfg.CapScope == "total" {
+		h.streamMu.Lock()
+		defer h.streamMu.Unlock()
+		// Gate BEFORE fetching: a rejected delta must not advance the LAPI cursor.
+		if !startup && !h.streamInitialized {
+			h.logger.Warn("total cap awaiting downstream startup sync; restart the firewall bouncer")
+			http.Error(w, "total cap requires a downstream startup sync; restart the firewall bouncer", http.StatusServiceUnavailable)
+			return
+		}
+	}
+
 	start := time.Now()
 	stream, err := h.client.GetDecisionsStream(ctx, startup)
 	if err != nil {
@@ -244,6 +257,9 @@ func (h *Handler) handleDecisionsStream(w http.ResponseWriter, r *http.Request) 
 		h.streamTracker.SetCapFromFullSync(syncV4)
 		h.streamTrackerV6.Reset()
 		h.streamTrackerV6.SetCapFromFullSync(syncV6)
+		if h.cfg.CapScope == "total" {
+			h.streamInitialized = true
+		}
 	} else {
 		// Incremental: apply stream-aware capping per address family.
 		// The trackers enforce cumulative CAPI caps between full syncs

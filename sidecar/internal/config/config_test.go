@@ -374,10 +374,10 @@ func TestScoringConfig_GetFreshnessBonus(t *testing.T) {
 		age  time.Duration
 		want int
 	}{
-		{30 * time.Minute, 15},  // < 1h -> 15
-		{2 * time.Hour, 10},     // < 24h -> 10
-		{100 * time.Hour, 5},    // < 168h -> 5
-		{200 * time.Hour, 0},    // > 168h -> 0
+		{30 * time.Minute, 15}, // < 1h -> 15
+		{2 * time.Hour, 10},    // < 24h -> 10
+		{100 * time.Hour, 5},   // < 168h -> 5
+		{200 * time.Hour, 0},   // > 168h -> 0
 	}
 
 	for _, tt := range tests {
@@ -401,10 +401,10 @@ func TestScoringConfig_GetCIDRBonus(t *testing.T) {
 		prefix int
 		want   int
 	}{
-		{8, 20},   // /8 -> 20
-		{16, 20},  // /16 -> 20
-		{24, 10},  // /24 -> 10
-		{32, 0},   // /32 -> 0
+		{8, 20},  // /8 -> 20
+		{16, 20}, // /16 -> 20
+		{24, 10}, // /24 -> 10
+		{32, 0},  // /32 -> 0
 	}
 
 	for _, tt := range tests {
@@ -569,5 +569,31 @@ func TestValidate_UpstreamTLSPairing(t *testing.T) {
 	cfg.UpstreamTLS.ClientCertPath = "c.pem"
 	if err := cfg.Validate(); err == nil {
 		t.Fatal("expected error when client cert set without key")
+	}
+}
+
+func TestLoadCapScope(t *testing.T) {
+	for _, tc := range []struct {
+		scope, mode string
+		bad         bool
+	}{
+		{"", "", false}, {"incremental", "evict", false}, {"total", "cap", false},
+		{"total", "evict", true}, {"invalid", "cap", true},
+	} {
+		t.Run(tc.scope+"/"+tc.mode, func(t *testing.T) {
+			t.Setenv("EVICTION_MODE", tc.mode)
+			p := filepath.Join(t.TempDir(), "config.yaml")
+			text := "listen_addr: '127.0.0.1:8084'\nupstream_lapi_url: 'http://localhost:8080'\nupstream_lapi_key: 'test'\nmax_decisions: 2\ncap_scope: '" + tc.scope + "'\n"
+			if err := os.WriteFile(p, []byte(text), 0600); err != nil {
+				t.Fatal(err)
+			}
+			cfg, err := Load(p)
+			if (err != nil) != tc.bad {
+				t.Fatalf("error=%v, want invalid=%v", err, tc.bad)
+			}
+			if err == nil && tc.scope == "" && cfg.CapScope != "incremental" {
+				t.Fatal("default must stay incremental")
+			}
+		})
 	}
 }

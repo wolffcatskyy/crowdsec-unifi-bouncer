@@ -17,6 +17,7 @@ type Config struct {
 	UpstreamLAPIURL string              `yaml:"upstream_lapi_url"`
 	UpstreamLAPIKey string              `yaml:"upstream_lapi_key"`
 	MaxDecisions    int                 `yaml:"max_decisions"`
+	CapScope        string              `yaml:"cap_scope"` // incremental (default), or total (cap mode only)
 	MaxDecisionsV6  int                 `yaml:"max_decisions_v6"`
 	EvictionMode    string              `yaml:"eviction_mode"` // "cap" (default) or "evict"
 	CacheTTL        time.Duration       `yaml:"cache_ttl"`
@@ -214,6 +215,10 @@ func Load(path string) (*Config, error) {
 		cfg.EvictionMode = "cap"
 	}
 
+	if cfg.CapScope == "" {
+		cfg.CapScope = "incremental"
+	}
+
 	// Upstream LAPI TLS environment variable overrides
 	if v := os.Getenv("UPSTREAM_LAPI_CA_CERT"); v != "" {
 		cfg.UpstreamTLS.CACertPath = v
@@ -291,6 +296,12 @@ func (c *Config) Validate() error {
 	}
 	if c.EvictionMode != "" && c.EvictionMode != "cap" && c.EvictionMode != "evict" {
 		return fmt.Errorf("eviction_mode must be 'cap' or 'evict', got %q", c.EvictionMode)
+	}
+	if c.CapScope != "" && c.CapScope != "incremental" && c.CapScope != "total" {
+		return fmt.Errorf("cap_scope must be incremental or total, got %q", c.CapScope)
+	}
+	if c.CapScope == "total" && c.EvictionMode == "evict" {
+		return fmt.Errorf("cap_scope total requires eviction_mode cap; total eviction is not supported")
 	}
 	if c.Scoring.FeedScoring.MaxPenalty < 0 {
 		return fmt.Errorf("scoring.feed_scoring.max_penalty cannot be negative")

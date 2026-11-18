@@ -6,7 +6,7 @@
 //
 // Without stream tracking, the sidecar correctly caps full sync responses to max_decisions,
 // but incremental updates bypass the cap because each small batch (often 1 decision) is
-// independently smaller than the limit. Over a 2-hour window between full syncs, enough
+// independently smaller than the limit. Between bouncer-startup full syncs, enough
 // incremental CAPI decisions accumulate to push the bouncer's ipset over its maxelem limit.
 //
 // StreamTracker solves this by maintaining a cumulative count of CAPI decisions passed
@@ -62,15 +62,18 @@ type trackedDecision struct {
 // and enforces the configured cap on incremental stream updates.
 // Two sets of decisions are tracked separately:
 //   - fullSyncSet: CAPI decisions from the authoritative full sync (always passed through)
-//   - trackedSet: INCREMENTAL CAPI decisions added since the last full sync
+//   - trackedSet: unique nonlocal values accepted from baseline + incrementals
 //
-// The cap only applies to incremental additions. This fixes the bug where a full sync
+// By default the cap only applies to incremental additions. Opt-in total mode
+// instead counts unique nonlocal baseline + incremental values together. The
+// default fixes the bug where a full sync
 // returning more CAPI decisions than maxDecisions (e.g., UDM Pro with 20k active vs 15k max)
 // would make capiCount start over the cap, silently dropping all subsequent incrementals.
 // Evictions also only ever replace incremental decisions, never baseline ones.
 type StreamTracker struct {
 	mu           sync.Mutex
 	maxDecisions int
+	totalCap     bool // opt-in unique nonlocal baseline + incremental accounting
 	mode         EvictionMode
 	logger       *slog.Logger
 
@@ -99,7 +102,7 @@ type StreamTracker struct {
 	localActive map[string]int
 
 	// Metrics (atomic for lock-free reads from metrics endpoint)
-	decisionsPassed atomic.Int64
+	decisionsPassed  atomic.Int64
 	decisionsDropped atomic.Int64
 	evictions        atomic.Int64
 	fullSyncs        atomic.Int64
@@ -121,11 +124,18 @@ type Metrics struct {
 
 // New creates a new StreamTracker.
 func New(maxDecisions int, mode EvictionMode, logger *slog.Logger) *StreamTracker {
+	return NewWithScope(maxDecisions, mode, false, logger)
+}
+
+// NewWithScope adds opt-in total accounting. Callers must reject total+evict
+// and wait for a real downstream startup full sync before admitting deltas.
+func NewWithScope(maxDecisions int, mode EvictionMode, totalCap bool, logger *slog.Logger) *StreamTracker {
 	if mode == "" {
 		mode = ModeCap
 	}
 	return &StreamTracker{
 		maxDecisions: maxDecisions,
+		totalCap:     totalCap,
 		mode:         mode,
 		logger:       logger,
 		trackedSet:   make(map[string]struct{}),
@@ -200,13 +210,19 @@ func (t *StreamTracker) FilterStreamDecisions(stream *lapi.DecisionStream) (kept
 			continue
 		}
 
-		// Genuinely new CAPI/community decision — check cap
-		if t.capiCount < t.maxDecisions {
+		// Total mode counts unique nonlocal values from BOTH sets. Set-derived
+		// occupancy makes repeated/unknown deletions harmless to admission.
+		count := t.capiCount
+		if t.totalCap {
+			count = len(t.trackedSet)
+		}
+		// Genuinely new CAPI/community decision: check the selected budget.
+		if count < t.maxDecisions {
 			// Under cap — pass through
 			kept = append(kept, d)
 			t.addTracked(d)
 			t.decisionsPassed.Add(1)
-		} else if t.mode == ModeEvict {
+		} else if t.mode == ModeEvict && !t.totalCap {
 			// At cap in evict mode — replace oldest, and return the evicted
 			// decision so the caller deletes it downstream
 			if ev, ok := t.evictOldest(); ok {
@@ -328,9 +344,9 @@ func (t *StreamTracker) evictOldest() (lapi.Decision, bool) {
 }
 
 // SetCapFromFullSync records the CAPI decisions from a full sync response as the
-// authoritative baseline. These baseline decisions are always passed through and are
-// NOT counted against the cap — the cap only applies to INCREMENTAL CAPI decisions
-// added after the full sync. This ensures that when a full sync returns more CAPI
+// authoritative baseline. In default incremental mode these values do not count
+// against the incremental cap. Opt-in total mode counts them through trackedSet.
+// The default ensures that when a full sync returns more CAPI
 // decisions than maxDecisions (e.g., UDM Pro with 20k active vs 15k max), subsequent
 // incremental decisions are not silently dropped (fixes #58).
 func (t *StreamTracker) SetCapFromFullSync(capiDecisions []lapi.Decision) {
