@@ -236,13 +236,13 @@ The `eviction_mode` setting controls how the sidecar handles incremental CAPI de
 | Mode | Behavior | Best For |
 |------|----------|----------|
 | `cap` (default) | Stops adding new CAPI decisions once at the limit. New decisions are silently dropped until the next bouncer restart/full sync rescores and reprioritizes everything. | **Most deployments.** Stable ipset count, predictable memory usage, no churn. There is no periodic full sync in the pinned client: missed decisions wait for a later reissue or a bouncer restart. |
-| `evict` | Replaces the oldest tracked CAPI decisions with newer ones when at the limit. Generates additional `deleted` entries in the stream response so the bouncer removes stale IPs from ipset. | **High-churn environments** where fresh threats matter more than stable blocklists. Useful if your CAPI feed rotates quickly and you want the newest IPs blocked at all times. |
+| `evict` | Replaces the oldest tracked CAPI decisions with newer ones when at the limit - tracker bookkeeping only. The evicted IP is NOT removed from the bouncer's ipset; it stays until it expires or the next full sync rescores the set. | **High-churn environments** where fresh threats matter more than stable blocklists. Occupancy is NOT bounded at baseline + `max_decisions`: every distinct unexpired value evicted between syncs stays downstream, and local bans add on top, so size the ipset with headroom for churn and locals. For a firm bound on tracked nonlocal values use `eviction_mode: cap` with `cap_scope: total` instead (total mode refuses `evict`). |
 
 Both modes always pass through local decisions (origin: `crowdsec`, `cscli`) regardless of the CAPI cap. Local detections from your own network are never dropped or evicted.
 
 Re-issued decisions also pass through in both modes: when the LAPI sends a fresh decision for a value the sidecar already forwarded (for example when a list refreshes), it occupies no new slot in the bouncer, so it does not count against the cap. Only genuinely new CAPI values consume cap space.
 
-One refinement in `evict` mode: if a value being evicted also has an active local ban (from your own scenarios), the eviction happens in the tracker but no deletion is sent downstream - the bouncer deletes by value, so the deletion would also remove the ipset entry the local ban relies on.
+Why `evict` does not delete downstream: the bouncer deletes by value, and the deduplicated decision stream does not show the sidecar every active local decision. A synthesized deletion for an evicted value could remove the ipset entry of a local ban the sidecar never observed. Rotating the tracker without sending deletions avoids that; the tradeoff is the occupancy leak described above.
 
 ```yaml
 # In config.yaml:
