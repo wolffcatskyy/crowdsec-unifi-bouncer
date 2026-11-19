@@ -40,6 +40,13 @@ max_decisions: 18000
 # Local decisions (origin: crowdsec, cscli) are always passed through regardless of mode.
 eviction_mode: "cap"
 
+# incremental (default): baseline is excluded from the incremental cap.
+# total (opt-in): cap unique nonlocal baseline + incremental values per family.
+# total supports eviction_mode: cap only. Local values need separate headroom.
+# After a sidecar restart, total mode returns 503 on deltas until the firewall
+# bouncer is cleanly restarted and sends its startup full sync. No timed resync.
+cap_scope: "incremental"
+
 # How long to cache LAPI responses
 # Reduces load on LAPI while ensuring bouncer gets fresh-enough data
 cache_ttl: 60s

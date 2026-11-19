@@ -3,11 +3,13 @@ package proxy
 import (
 	"context"
 	"encoding/json"
+	"io"
 	"log/slog"
 	"net/http"
 	"net/http/httptest"
 	"os"
 	"strings"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -470,5 +472,146 @@ func TestHandler_MetricsTopNAggregation(t *testing.T) {
 	// "other" for dropped = 5
 	if !strings.Contains(body, `crowdsec_sidecar_scenario_dropped{scenario="other"} 5`) {
 		t.Error("expected 'other' aggregation = 5 for dropped scenarios")
+	}
+}
+
+// End-to-end regression for issue #81: tracker evictions are bookkeeping only
+// and must never augment the upstream deletion list sent to the bouncer. The
+// deduplicated stream can hide active local bans the tracker never observed,
+// so a synthesized deletion by value could remove their ipset entries.
+func TestHandlerStreamDeletedNeverAugmentedByEviction(t *testing.T) {
+	var deltaCalls atomic.Int32
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		s := lapi.DecisionStream{}
+		if r.URL.Query().Get("startup") == "true" {
+			// empty baseline
+		} else {
+			switch deltaCalls.Add(1) {
+			case 1:
+				s.New = []lapi.Decision{capDecision(1, "192.0.2.1")}
+				s.Deleted = []lapi.Decision{capDecision(9, "192.0.2.9")}
+			case 2:
+				s.New = []lapi.Decision{capDecision(2, "192.0.2.2")}
+			}
+		}
+		json.NewEncoder(w).Encode(s)
+	}))
+	defer server.Close()
+
+	cfg := testConfig(server.URL)
+	cfg.EvictionMode = "evict"
+	cfg.MaxDecisions = 1
+	cfg.MaxDecisionsV6 = 10
+	h := New(cfg, slog.New(slog.NewTextHandler(io.Discard, nil)))
+
+	if code, _ := capPoll(t, h, true); code != 200 {
+		t.Fatalf("startup code=%d", code)
+	}
+
+	// Delta 1: passes A; upstream's own deletion D must pass through exactly.
+	code, s := capPoll(t, h, false)
+	if code != 200 {
+		t.Fatalf("delta1 code=%d", code)
+	}
+	if len(s.New) != 1 || s.New[0].Value != "192.0.2.1" {
+		t.Fatalf("delta1 new=%+v", s.New)
+	}
+	if len(s.Deleted) != 1 || s.Deleted[0].Value != "192.0.2.9" {
+		t.Fatalf("delta1 deleted=%+v", s.Deleted)
+	}
+
+	// Delta 2: at cap in evict mode the tracker rotates A out for B, but the
+	// downstream deletion list must stay exactly what upstream sent (empty).
+	code, s = capPoll(t, h, false)
+	if code != 200 {
+		t.Fatalf("delta2 code=%d", code)
+	}
+	if len(s.New) != 1 || s.New[0].Value != "192.0.2.2" {
+		t.Fatalf("delta2 new=%+v", s.New)
+	}
+	if len(s.Deleted) != 0 {
+		t.Fatalf("eviction augmented upstream deletions: %+v", s.Deleted)
+	}
+}
+
+// End-to-end regression for issue #81: a local ban on value A can be hidden
+// behind the CAPI decision for A in the deduplicated stream, so the sidecar
+// only ever observes CAPI A. When CAPI B arrives at cap one and the tracker
+// rotates A out (bookkeeping only), the response must carry NO deletion for
+// A: the ipset entry the bouncer holds for A may be enforcing the hidden
+// local ban, and a synthesized deletion would silently unenforce it.
+func TestHandlerEvictionDoesNotDeleteHiddenLocalBan(t *testing.T) {
+	var deltaCalls atomic.Int32
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		s := lapi.DecisionStream{}
+		if r.URL.Query().Get("startup") == "true" {
+			// empty baseline
+		} else {
+			switch deltaCalls.Add(1) {
+			case 1:
+				// Dedup shows only the CAPI decision for A; the local ban on
+				// A is hidden behind it and never reaches the sidecar.
+				s.New = []lapi.Decision{capDecision(1, "192.0.2.1")}
+			case 2:
+				s.New = []lapi.Decision{capDecision(2, "192.0.2.2")}
+			case 3:
+				// Upstream's own deletion, sent when the CAPI decision on A
+				// genuinely expires.
+				s.Deleted = []lapi.Decision{capDecision(1, "192.0.2.1")}
+			}
+		}
+		json.NewEncoder(w).Encode(s)
+	}))
+	defer server.Close()
+
+	cfg := testConfig(server.URL)
+	cfg.EvictionMode = "evict"
+	cfg.MaxDecisions = 1
+	cfg.MaxDecisionsV6 = 10
+	h := New(cfg, slog.New(slog.NewTextHandler(io.Discard, nil)))
+
+	if code, _ := capPoll(t, h, true); code != 200 {
+		t.Fatalf("startup code=%d", code)
+	}
+
+	// Delta 1: CAPI A passes and fills the tracker (1/1).
+	code, s := capPoll(t, h, false)
+	if code != 200 {
+		t.Fatalf("delta1 code=%d", code)
+	}
+	if len(s.New) != 1 || s.New[0].Value != "192.0.2.1" {
+		t.Fatalf("delta1 new=%+v", s.New)
+	}
+	if len(s.Deleted) != 0 {
+		t.Fatalf("delta1 deleted=%+v", s.Deleted)
+	}
+
+	// Delta 2: CAPI B arrives at cap one; the tracker evicts A as bookkeeping.
+	// The response must NOT synthesize a deletion for A.
+	code, s = capPoll(t, h, false)
+	if code != 200 {
+		t.Fatalf("delta2 code=%d", code)
+	}
+	if len(s.New) != 1 || s.New[0].Value != "192.0.2.2" {
+		t.Fatalf("delta2 new=%+v", s.New)
+	}
+	if len(s.Deleted) != 0 {
+		t.Fatalf("eviction synthesized a deletion that could remove the hidden local ban: %+v", s.Deleted)
+	}
+	// Prove the eviction path actually ran, so the empty deletion list is not vacuous.
+	if ev := h.streamTracker.GetMetrics().Evictions; ev != 1 {
+		t.Fatalf("expected 1 tracker eviction, got %d", ev)
+	}
+
+	// Delta 3: the only deletion the bouncer ever hears for A is upstream's own.
+	code, s = capPoll(t, h, false)
+	if code != 200 {
+		t.Fatalf("delta3 code=%d", code)
+	}
+	if len(s.New) != 0 {
+		t.Fatalf("delta3 new=%+v", s.New)
+	}
+	if len(s.Deleted) != 1 || s.Deleted[0].Value != "192.0.2.1" {
+		t.Fatalf("upstream deletion for A must pass through exactly once: %+v", s.Deleted)
 	}
 }

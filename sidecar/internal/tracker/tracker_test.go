@@ -687,3 +687,132 @@ func itoa(n int) string {
 	}
 	return s
 }
+
+// Regression tests for issue #81.
+
+// Re-issued full-sync baseline decisions must pass through at cap without
+// consuming an incremental slot. Dropping them lets the older decision expire
+// later and unloads a value that is still meant to be active.
+func TestStreamTracker_ReissuedBaselinePassesAtCap(t *testing.T) {
+	tr := New(2, ModeCap, testLogger())
+	tr.SetCapFromFullSync([]lapi.Decision{
+		{ID: 1, Origin: "CAPI", Value: "10.0.0.1", Scope: "ip"},
+		{ID: 2, Origin: "CAPI", Value: "10.0.0.2", Scope: "ip"},
+	})
+
+	// Fill the incremental cap
+	tr.FilterStreamDecisions(&lapi.DecisionStream{
+		New: []lapi.Decision{
+			{ID: 3, Origin: "CAPI", Value: "1.1.1.1", Scope: "ip"},
+			{ID: 4, Origin: "CAPI", Value: "2.2.2.2", Scope: "ip"},
+		},
+	})
+
+	// At cap: a re-issued baseline decision still passes
+	kept := tr.FilterStreamDecisions(&lapi.DecisionStream{
+		New: []lapi.Decision{
+			{ID: 1, Origin: "CAPI", Value: "10.0.0.1", Scope: "ip"},
+		},
+	})
+	if len(kept) != 1 {
+		t.Fatalf("expected re-issued baseline decision to pass at cap, got %d kept", len(kept))
+	}
+	m := tr.GetMetrics()
+	if m.CAPICount != 2 {
+		t.Fatalf("expected incremental count to stay 2, got %d", m.CAPICount)
+	}
+
+	// A genuinely new decision at cap is still dropped (cap semantics preserved)
+	kept = tr.FilterStreamDecisions(&lapi.DecisionStream{
+		New: []lapi.Decision{
+			{ID: 5, Origin: "CAPI", Value: "3.3.3.3", Scope: "ip"},
+		},
+	})
+	if len(kept) != 0 {
+		t.Fatalf("expected new decision to be dropped at cap, got %d kept", len(kept))
+	}
+}
+
+// Re-issued incremental decisions also pass at cap without consuming a slot.
+func TestStreamTracker_ReissuedIncrementalPassesAtCap(t *testing.T) {
+	tr := New(1, ModeCap, testLogger())
+
+	tr.FilterStreamDecisions(&lapi.DecisionStream{
+		New: []lapi.Decision{
+			{ID: 1, Origin: "CAPI", Value: "1.1.1.1", Scope: "ip"},
+		},
+	})
+
+	// At cap: re-issue of the tracked incremental passes, count unchanged
+	kept := tr.FilterStreamDecisions(&lapi.DecisionStream{
+		New: []lapi.Decision{
+			{ID: 2, Origin: "CAPI", Value: "1.1.1.1", Scope: "ip"},
+		},
+	})
+	if len(kept) != 1 {
+		t.Fatalf("expected re-issued incremental to pass at cap, got %d kept", len(kept))
+	}
+	if m := tr.GetMetrics(); m.CAPICount != 1 {
+		t.Fatalf("expected count to stay 1, got %d", m.CAPICount)
+	}
+
+	// New value at cap is dropped
+	kept = tr.FilterStreamDecisions(&lapi.DecisionStream{
+		New: []lapi.Decision{
+			{ID: 3, Origin: "CAPI", Value: "2.2.2.2", Scope: "ip"},
+		},
+	})
+	if len(kept) != 0 {
+		t.Fatalf("expected new decision to be dropped at cap, got %d kept", len(kept))
+	}
+}
+
+// Legacy eviction characterization: at cap in evict mode the tracker rotates
+// its bookkeeping (eviction metric increments, count stays at the cap, the
+// new decision passes), and the value is NOT tracked anymore. No downstream
+// deletion exists in this API at all - the single return value carries only
+// kept decisions - so an eviction can never remove the ipset entry of a local
+// ban the tracker did not observe (hidden by stream deduplication, #81).
+func TestStreamTracker_EvictionIsBookkeepingOnly(t *testing.T) {
+	tr := New(1, ModeEvict, testLogger())
+
+	kept := tr.FilterStreamDecisions(&lapi.DecisionStream{
+		New: []lapi.Decision{
+			{ID: 1, Origin: "CAPI", Value: "1.1.1.1", Scope: "ip", Type: "ban"},
+		},
+	})
+	if len(kept) != 1 {
+		t.Fatalf("expected first decision to pass, got %d kept", len(kept))
+	}
+
+	// At cap: rotation occurs, new decision passes, count stays at the cap
+	kept = tr.FilterStreamDecisions(&lapi.DecisionStream{
+		New: []lapi.Decision{
+			{ID: 2, Origin: "CAPI", Value: "2.2.2.2", Scope: "ip", Type: "ban"},
+		},
+	})
+	if len(kept) != 1 {
+		t.Fatalf("expected new decision to pass via eviction, got %d kept", len(kept))
+	}
+	m := tr.GetMetrics()
+	if m.Evictions != 1 {
+		t.Fatalf("expected 1 eviction, got %d", m.Evictions)
+	}
+	if m.CAPICount != 1 {
+		t.Fatalf("expected count to stay 1 after rotation, got %d", m.CAPICount)
+	}
+
+	// The evicted value is no longer tracked: a re-issue is treated as new
+	// and rotates again.
+	kept = tr.FilterStreamDecisions(&lapi.DecisionStream{
+		New: []lapi.Decision{
+			{ID: 3, Origin: "CAPI", Value: "1.1.1.1", Scope: "ip", Type: "ban"},
+		},
+	})
+	if len(kept) != 1 {
+		t.Fatalf("expected re-issued evicted value to be treated as new, got %d kept", len(kept))
+	}
+	if m := tr.GetMetrics(); m.Evictions != 2 {
+		t.Fatalf("expected 2 evictions, got %d", m.Evictions)
+	}
+}

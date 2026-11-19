@@ -231,14 +231,18 @@ scoring:
 
 ### Eviction Mode
 
-The `eviction_mode` setting controls how the sidecar handles incremental CAPI decisions that arrive between full syncs (every ~2 hours). When the bouncer polls `/v1/decisions/stream` with `startup=false`, the sidecar tracks cumulative CAPI decision count and enforces the `max_decisions` cap.
+The `eviction_mode` setting controls how the sidecar handles incremental CAPI decisions that arrive between bouncer-startup full syncs. When the bouncer polls `/v1/decisions/stream` with `startup=false`, the sidecar tracks cumulative CAPI decision count and enforces the `max_decisions` cap.
 
 | Mode | Behavior | Best For |
 |------|----------|----------|
-| `cap` (default) | Stops adding new CAPI decisions once at the limit. New decisions are silently dropped until the next full sync rescores and reprioritizes everything. | **Most deployments.** Stable ipset count, predictable memory usage, no churn. The full sync (every ~2h) will pick up anything important that was missed. |
-| `evict` | Replaces the oldest tracked CAPI decisions with newer ones when at the limit. Generates additional `deleted` entries in the stream response so the bouncer removes stale IPs from ipset. | **High-churn environments** where fresh threats matter more than stable blocklists. Useful if your CAPI feed rotates quickly and you want the newest IPs blocked at all times. |
+| `cap` (default) | Stops adding new CAPI decisions once at the limit. New decisions are silently dropped until the next bouncer restart/full sync rescores and reprioritizes everything. | **Most deployments.** Stable ipset count, predictable memory usage, no churn. There is no periodic full sync in the pinned client: missed decisions wait for a later reissue or a bouncer restart. |
+| `evict` | Replaces the oldest tracked CAPI decisions with newer ones when at the limit - tracker bookkeeping only. The evicted IP is NOT removed from the bouncer's ipset; it stays until it expires or the next full sync rescores the set. | **High-churn environments** where fresh threats matter more than stable blocklists. Occupancy is NOT bounded at baseline + `max_decisions`: every distinct unexpired value evicted between syncs stays downstream, and local bans add on top, so size the ipset with headroom for churn and locals. For a firm bound on tracked nonlocal values use `eviction_mode: cap` with `cap_scope: total` instead (total mode refuses `evict`). |
 
 Both modes always pass through local decisions (origin: `crowdsec`, `cscli`) regardless of the CAPI cap. Local detections from your own network are never dropped or evicted.
+
+Re-issued decisions also pass through in both modes: when the LAPI sends a fresh decision for a value the sidecar already forwarded (for example when a list refreshes), it occupies no new slot in the bouncer, so it does not count against the cap. Only genuinely new CAPI values consume cap space.
+
+Why `evict` does not delete downstream: the bouncer deletes by value, and the deduplicated decision stream does not show the sidecar every active local decision. A synthesized deletion for an evicted value could remove the ipset entry of a local ban the sidecar never observed. Rotating the tracker without sending deletions avoids that; the tradeoff is the occupancy leak described above.
 
 ```yaml
 # In config.yaml:
@@ -331,6 +335,18 @@ abuseipdb:
 Reports include the CrowdSec scenario name and ban duration in the comment field.
 
 ---
+
+### Opt-in total cap for cap mode
+
+`cap_scope: incremental` is the unchanged default. The full-sync baseline is excluded from the incremental budget, so nonlocal values can approach baseline + `max_decisions` per family. Do not size an ipset as though this were a total cap.
+
+Set `cap_scope: total` with `eviction_mode: cap` to count unique nonlocal values across the accepted full-sync baseline and admitted incrementals against the same per-family budget. Reissues of loaded values still pass, refreshing their timeouts without consuming another slot. Values rejected at full sync are not loaded merely because a later incremental reissues them while the cap is full. Expiry of a tracked value frees a slot. IPv4 and IPv6 remain independent.
+
+Total mode refuses `eviction_mode: evict` at config validation. This first fix deliberately does not introduce a raw-ID stream protocol or claim to solve legacy eviction/local-origin visibility. With a full protected baseline, fresh remote values are rejected until capacity frees; there is no automatic two-hour reprioritization. Cleanly restarting the firewall bouncer requests a new scored startup full sync. Same scope/type/value expiration uses the upstream default deduped stream; broader cross-type enforcement is unchanged.
+
+On a sidecar-only restart, total mode cannot know what the downstream ipset still holds. It returns HTTP503 for delta polls BEFORE making an upstream request, so those rejected polls do not advance the LAPI cursor. Cleanly restart the firewall bouncer to send `startup=true`; until that real full sync succeeds, new stream updates are paused while already loaded entries retain their existing kernel timeouts. There is no timed recovery or estimated bootstrap. Stream fetch, initialization and both-family tracking are serialized in total mode.
+
+Local-origin decisions still pass incrementally without consuming the nonlocal budget. Reserve ipset capacity for local decisions and stale entries as well as the configured nonlocal cap. This is not an absolute kernel-occupancy guarantee: unbounded locals, unclean restarts, failed downstream restores and unsupported configurations can exceed assumptions. Activate total mode with a clean coordinated bouncer restart/full sync. No live firewall changes are performed by selecting a config example.
 
 ## Endpoints
 
